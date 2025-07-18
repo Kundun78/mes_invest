@@ -1,0 +1,31 @@
+# Ignorer les notebooks
+*.ipynb
+
+# Ignorer les bases de données SQLite ou autres
+*.db
+
+# Ignorer tous les dossiers (à personnaliser si nécessaire)
+*/
+
+# Si tu veux ignorer certains dossiers spécifiques seulement, remplace ci-dessus par par exemple :
+# data/
+# logs/
+# tmp/
+
+# Fichiers Python à ignorer
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environnement virtuel
+env/
+venv/
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Fichiers temporaires
+*.log
+*.bak
+*.swp
