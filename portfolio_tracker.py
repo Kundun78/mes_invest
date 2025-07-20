@@ -19,9 +19,235 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+class CurrencyConverter:
+    """Gestionnaire de conversion de devises EUR/USD + support autres devises"""
+    
+    def __init__(self):
+        self.eur_usd_rate = None  # Combien d'USD pour 1 EUR
+        self.last_update = None
+        # Taux fixes pour les autres devises (vers EUR)
+        self.other_rates = {
+            'GBP': 1.15,  # 1 GBP = 1.15 EUR
+            'CHF': 0.95,  # 1 CHF = 0.95 EUR
+            'CAD': 0.65   # 1 CAD = 0.65 EUR
+        }
+    
+    def get_eur_usd_rate_alternative(self, show_debug=False) -> bool:
+        """Méthode alternative pour récupérer le taux EUR/USD via une API gratuite"""
+        try:
+            if show_debug:
+                st.write("🔄 Tentative avec API alternative...")
+            
+            import requests
+            
+            # API gratuite pour les taux de change
+            url = "https://api.exchangerate-api.com/v4/latest/EUR"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if 'rates' in data and 'USD' in data['rates']:
+                    self.eur_usd_rate = data['rates']['USD']
+                    self.last_update = datetime.now()
+                    
+                    if show_debug:
+                        st.success(f"✅ Taux EUR/USD récupéré via API: 1 EUR = {self.eur_usd_rate:.4f} USD")
+                    
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            if show_debug:
+                st.write(f"❌ Erreur API alternative: {str(e)}")
+            return False
+    def get_eur_usd_rate(self, show_debug=False) -> bool:
+        """Récupère le taux de change EUR/USD via yfinance puis API de secours"""
+        try:
+            # Mise à jour toutes les 6 heures seulement
+            if (self.last_update and 
+                datetime.now() - self.last_update < timedelta(hours=6)):
+                return True
+            
+            # Essayer d'abord Yahoo Finance avec plusieurs symboles
+            symbols_to_try = ['EURUSD=X', 'EUR=X', 'USDEUR=X']
+            
+            for symbol in symbols_to_try:
+                try:
+                    if show_debug:
+                        st.write(f"🔍 Tentative de récupération du taux avec {symbol}...")
+                    
+                    ticker = yf.Ticker(symbol)
+                    hist = ticker.history(period="2d")  # 2 jours pour plus de chances
+                    
+                    if not hist.empty:
+                        rate = hist['Close'].iloc[-1]
+                        
+                        if show_debug:
+                            st.write(f"✅ Taux trouvé avec {symbol}: {rate}")
+                        
+                        # Si c'est USDEUR=X, on inverse le taux
+                        if symbol == 'USDEUR=X':
+                            self.eur_usd_rate = 1.0 / rate
+                        else:
+                            self.eur_usd_rate = rate
+                        
+                        self.last_update = datetime.now()
+                        
+                        if show_debug:
+                            st.success(f"✅ Taux EUR/USD récupéré: 1 EUR = {self.eur_usd_rate:.4f} USD")
+                        
+                        return True
+                    else:
+                        if show_debug:
+                            st.write(f"⚠️ Pas de données pour {symbol}")
+                        
+                except Exception as e:
+                    if show_debug:
+                        st.write(f"❌ Erreur avec {symbol}: {str(e)}")
+                    continue
+            
+            # Si Yahoo Finance ne fonctionne pas, essayer l'API alternative
+            if show_debug:
+                st.write("🔄 Yahoo Finance indisponible, tentative avec API alternative...")
+            
+            if self.get_eur_usd_rate_alternative():
+                return True
+            
+            # Si rien ne fonctionne, utiliser un taux de secours
+            if show_debug:
+                st.warning("⚠️ Impossible de récupérer le taux EUR/USD en temps réel, utilisation d'un taux de secours")
+            
+            self.eur_usd_rate = 1.08  # Approximatif EUR/USD
+            self.last_update = datetime.now()
+            return False
+                
+        except Exception as e:
+            if show_debug:
+                st.error(f"Erreur générale lors de la récupération du taux EUR/USD: {e}")
+            
+            # Utiliser un taux de secours
+            self.eur_usd_rate = 1.08  # Approximatif : 1 EUR = 1.08 USD
+            self.last_update = datetime.now()
+            return False
+    
+    def eur_to_usd(self, eur_amount: float) -> float:
+        """Convertit EUR vers USD"""
+        if not self.eur_usd_rate:
+            self.get_eur_usd_rate()
+        
+        if not self.eur_usd_rate:
+            st.warning("⚠️ Taux EUR/USD non disponible, pas de conversion appliquée")
+            return eur_amount
+        
+        return eur_amount * self.eur_usd_rate
+    
+    def usd_to_eur(self, usd_amount: float) -> float:
+        """Convertit USD vers EUR"""
+        if not self.eur_usd_rate:
+            self.get_eur_usd_rate()
+        
+        if not self.eur_usd_rate:
+            st.warning("⚠️ Taux EUR/USD non disponible, pas de conversion appliquée")
+            return usd_amount
+        
+        return usd_amount / self.eur_usd_rate
+    
+    def convert_to_eur(self, amount: float, from_currency: str) -> float:
+        """Convertit un montant vers EUR (méthode de compatibilité)"""
+        if from_currency == 'EUR':
+            return amount
+        elif from_currency == 'USD':
+            return self.usd_to_eur(amount)
+        elif from_currency in self.other_rates:
+            return amount * self.other_rates[from_currency]
+        else:
+            st.warning(f"⚠️ Devise {from_currency} non supportée, pas de conversion appliquée")
+            return amount
+    
+    def convert_price_to_both(self, price: float, original_currency: str) -> tuple:
+        """Convertit un prix vers EUR et USD"""
+        if not self.eur_usd_rate:
+            self.get_eur_usd_rate()
+        
+        if original_currency == 'EUR':
+            price_eur = price
+            price_usd = self.eur_to_usd(price)
+        elif original_currency == 'USD':
+            price_eur = self.usd_to_eur(price)
+            price_usd = price
+        else:
+            # Pour d'autres devises, convertir d'abord en EUR puis en USD
+            if original_currency in self.other_rates:
+                price_eur = price * self.other_rates[original_currency]
+                price_usd = self.eur_to_usd(price_eur)
+            else:
+                # Par défaut, considérer comme EUR
+                price_eur = price
+                price_usd = self.eur_to_usd(price)
+        
+        return price_eur, price_usd
+    
+    def get_rate_info(self) -> str:
+        """Retourne les informations sur le taux actuel"""
+        if not self.eur_usd_rate:
+            # Essayer de récupérer le taux sans les messages de debug
+            self._get_eur_usd_rate_silent()
+        
+        if not self.eur_usd_rate:
+            return "Taux de change EUR/USD non disponible\nUtilisation d'un taux de secours sera appliquée lors des conversions."
+        
+        rates_text = f"Taux de change actuel:\n"
+        rates_text += f"1 EUR = {self.eur_usd_rate:.4f} USD\n"
+        rates_text += f"1 USD = {(1/self.eur_usd_rate):.4f} EUR\n"
+        
+        rates_text += f"\nAutres devises (taux fixes):\n"
+        for currency, rate in self.other_rates.items():
+            rates_text += f"1 {currency} = {rate:.4f} EUR\n"
+        
+        if self.last_update:
+            rates_text += f"\nDernière mise à jour EUR/USD: {self.last_update.strftime('%d/%m/%Y %H:%M')}"
+        
+        return rates_text
+    
+    def _get_eur_usd_rate_silent(self) -> bool:
+        """Version silencieuse de get_eur_usd_rate pour les vérifications internes"""
+        try:
+            # Essayer rapidement Yahoo Finance
+            ticker = yf.Ticker('EURUSD=X')
+            hist = ticker.history(period="1d")
+            
+            if not hist.empty:
+                self.eur_usd_rate = hist['Close'].iloc[-1]
+                self.last_update = datetime.now()
+                return True
+            
+            # Essayer l'API alternative
+            import requests
+            url = "https://api.exchangerate-api.com/v4/latest/EUR"
+            response = requests.get(url, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if 'rates' in data and 'USD' in data['rates']:
+                    self.eur_usd_rate = data['rates']['USD']
+                    self.last_update = datetime.now()
+                    return True
+            
+            # Utiliser le taux de secours
+            self.eur_usd_rate = 1.08
+            self.last_update = datetime.now()
+            return False
+            
+        except:
+            self.eur_usd_rate = 1.08
+            self.last_update = datetime.now()
+            return False
+
 class PortfolioTracker:
     def __init__(self, db_path: str = "portfolio.db"):
         self.db_path = db_path
+        self.currency_converter = CurrencyConverter()
         self.init_database()
     
     def init_database(self):
@@ -49,7 +275,7 @@ class PortfolioTracker:
             )
         ''')
         
-        # Table des produits financiers
+        # Table des produits financiers avec prix EUR et USD
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS financial_products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,11 +284,13 @@ class PortfolioTracker:
                 product_type TEXT NOT NULL,
                 currency TEXT DEFAULT 'EUR',
                 current_price REAL,
+                current_price_eur REAL,
+                current_price_usd REAL,
                 last_updated TIMESTAMP
             )
         ''')
         
-        # Table des transactions
+        # Table des transactions avec devise de saisie
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,24 +299,71 @@ class PortfolioTracker:
                 transaction_type TEXT NOT NULL,
                 quantity REAL NOT NULL,
                 price REAL NOT NULL,
+                price_currency TEXT DEFAULT 'EUR',
+                price_eur REAL,
+                price_usd REAL,
                 transaction_date TIMESTAMP NOT NULL,
                 fees REAL DEFAULT 0,
+                fees_currency TEXT DEFAULT 'EUR',
                 FOREIGN KEY (account_id) REFERENCES accounts (id),
                 FOREIGN KEY (product_id) REFERENCES financial_products (id)
             )
         ''')
         
-        # Table des prix historiques
+        # Table des prix historiques avec EUR et USD
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS price_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 product_id INTEGER,
                 price REAL NOT NULL,
+                price_eur REAL,
+                price_usd REAL,
                 date DATE NOT NULL,
                 FOREIGN KEY (product_id) REFERENCES financial_products (id),
                 UNIQUE(product_id, date)
             )
         ''')
+        
+        # Mise à jour des tables existantes pour ajouter les nouvelles colonnes
+        try:
+            cursor.execute('ALTER TABLE financial_products ADD COLUMN current_price_eur REAL')
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+        
+        try:
+            cursor.execute('ALTER TABLE financial_products ADD COLUMN current_price_usd REAL')
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+        
+        try:
+            cursor.execute('ALTER TABLE transactions ADD COLUMN price_currency TEXT DEFAULT "EUR"')
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+        
+        try:
+            cursor.execute('ALTER TABLE transactions ADD COLUMN price_eur REAL')
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+        
+        try:
+            cursor.execute('ALTER TABLE transactions ADD COLUMN price_usd REAL')
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+        
+        try:
+            cursor.execute('ALTER TABLE transactions ADD COLUMN fees_currency TEXT DEFAULT "EUR"')
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+        
+        try:
+            cursor.execute('ALTER TABLE price_history ADD COLUMN price_eur REAL')
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+        
+        try:
+            cursor.execute('ALTER TABLE price_history ADD COLUMN price_usd REAL')
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
         
         conn.commit()
         conn.close()
@@ -200,6 +475,9 @@ class PortfolioTracker:
             # Récupérer le prix actuel et des informations
             current_price = hist['Close'].iloc[-1]
             
+            # Convertir le prix en EUR et USD
+            price_eur, price_usd = self.currency_converter.convert_price_to_both(current_price, currency)
+            
             # Essayer de récupérer le nom réel du produit si disponible
             real_name = info.get('longName') or info.get('shortName') or name
             
@@ -207,19 +485,25 @@ class PortfolioTracker:
             cursor = conn.cursor()
             try:
                 cursor.execute('''INSERT INTO financial_products 
-                                (symbol, name, product_type, currency, current_price, last_updated) 
-                                VALUES (?, ?, ?, ?, ?, ?)''',
-                              (symbol, real_name, product_type, currency, current_price, datetime.now()))
+                                (symbol, name, product_type, currency, current_price, 
+                                 current_price_eur, current_price_usd, last_updated) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                              (symbol, real_name, product_type, currency, current_price, 
+                               price_eur, price_usd, datetime.now()))
                 
-                # Ajouter quelques points d'historique récent
+                # Ajouter quelques points d'historique récent avec conversion
                 product_id = cursor.lastrowid
                 for date, row in hist.iterrows():
-                    cursor.execute('''INSERT OR REPLACE INTO price_history (product_id, price, date)
-                                    VALUES (?, ?, ?)''',
-                                  (product_id, row['Close'], date.date()))
+                    hist_price_eur, hist_price_usd = self.currency_converter.convert_price_to_both(
+                        row['Close'], currency
+                    )
+                    cursor.execute('''INSERT OR REPLACE INTO price_history 
+                                    (product_id, price, price_eur, price_usd, date)
+                                    VALUES (?, ?, ?, ?, ?)''',
+                                  (product_id, row['Close'], hist_price_eur, hist_price_usd, date.date()))
                 
                 conn.commit()
-                return True, f"Produit '{symbol}' ajouté avec succès ! Prix actuel: {current_price:.2f} {currency}"
+                return True, f"Produit '{symbol}' ajouté avec succès ! Prix actuel: {current_price:.2f} {currency} ({price_eur:.2f} EUR / {price_usd:.2f} USD)"
             except sqlite3.IntegrityError:
                 return False, f"Le symbole '{symbol}' existe déjà dans votre portefeuille."
             finally:
@@ -270,8 +554,9 @@ class PortfolioTracker:
             return False, f"Erreur lors de la suppression : {e}"
     
     def add_transaction(self, account_id: int, product_symbol: str, transaction_type: str,
-                       quantity: float, price: float, transaction_date: datetime, fees: float = 0):
-        """Ajoute une nouvelle transaction"""
+                       quantity: float, price: float, price_currency: str, transaction_date: datetime, 
+                       fees: float = 0, fees_currency: str = "EUR"):
+        """Ajoute une nouvelle transaction avec devise de saisie"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -279,15 +564,28 @@ class PortfolioTracker:
         cursor.execute("SELECT id FROM financial_products WHERE symbol = ?", (product_symbol,))
         product_id = cursor.fetchone()[0]
         
+        # Convertir le prix dans les deux devises
+        price_eur, price_usd = self.currency_converter.convert_price_to_both(price, price_currency)
+        
+        # Convertir les frais en EUR (devise de référence pour les frais)
+        if fees_currency == "EUR":
+            fees_eur = fees
+        elif fees_currency == "USD":
+            fees_eur = self.currency_converter.usd_to_eur(fees)
+        else:
+            fees_eur = fees  # Par défaut
+        
         cursor.execute('''INSERT INTO transactions 
-                        (account_id, product_id, transaction_type, quantity, price, transaction_date, fees)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                      (account_id, product_id, transaction_type, quantity, price, transaction_date, fees))
+                        (account_id, product_id, transaction_type, quantity, price, price_currency,
+                         price_eur, price_usd, transaction_date, fees, fees_currency)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                      (account_id, product_id, transaction_type, quantity, price, price_currency,
+                       price_eur, price_usd, transaction_date, fees_eur, fees_currency))
         conn.commit()
         conn.close()
     
     def get_all_transactions(self) -> pd.DataFrame:
-        """Récupère toutes les transactions avec détails"""
+        """Récupère toutes les transactions avec détails et devises"""
         conn = sqlite3.connect(self.db_path)
         query = '''
             SELECT 
@@ -296,8 +594,12 @@ class PortfolioTracker:
                 t.transaction_type,
                 t.quantity,
                 t.price,
+                t.price_currency,
+                t.price_eur,
+                t.price_usd,
                 t.transaction_date,
                 t.fees,
+                t.fees_currency,
                 fp.symbol,
                 fp.name as product_name,
                 a.name as account_name,
@@ -313,7 +615,8 @@ class PortfolioTracker:
         
         if not df.empty:
             df['transaction_date'] = pd.to_datetime(df['transaction_date'])
-            df['total_amount'] = df['quantity'] * df['price'] + df['fees']
+            # Utiliser le prix EUR pour calculer le montant total
+            df['total_amount'] = df['quantity'] * df['price_eur'] + df['fees']
         
         return df
     
@@ -436,7 +739,7 @@ class PortfolioTracker:
         return None
     
     def update_price(self, symbol: str, days_history: int = 30) -> bool:
-        """Met à jour le prix d'un produit avec historique via yfinance"""
+        """Met à jour le prix d'un produit avec historique via yfinance et conversion EUR/USD"""
         try:
             ticker = yf.Ticker(symbol)
             # Récupérer l'historique sur la période demandée
@@ -447,21 +750,33 @@ class PortfolioTracker:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
+                # Récupérer la devise du produit
+                cursor.execute("SELECT currency FROM financial_products WHERE symbol = ?", (symbol,))
+                result = cursor.fetchone()
+                product_currency = result[0] if result else 'EUR'
+                
+                # Convertir le prix actuel dans les deux devises
+                price_eur, price_usd = self.currency_converter.convert_price_to_both(current_price, product_currency)
+                
                 # Met à jour le prix actuel
                 cursor.execute('''UPDATE financial_products 
-                                SET current_price = ?, last_updated = ?
+                                SET current_price = ?, current_price_eur = ?, current_price_usd = ?, last_updated = ?
                                 WHERE symbol = ?''',
-                              (current_price, datetime.now(), symbol))
+                              (current_price, price_eur, price_usd, datetime.now(), symbol))
                 
                 # Récupère l'ID du produit
                 cursor.execute("SELECT id FROM financial_products WHERE symbol = ?", (symbol,))
                 product_id = cursor.fetchone()[0]
                 
-                # Ajoute tout l'historique à la base
+                # Ajoute tout l'historique à la base avec conversion
                 for date, row in hist.iterrows():
-                    cursor.execute('''INSERT OR REPLACE INTO price_history (product_id, price, date)
-                                    VALUES (?, ?, ?)''',
-                                  (product_id, row['Close'], date.date()))
+                    hist_price_eur, hist_price_usd = self.currency_converter.convert_price_to_both(
+                        row['Close'], product_currency
+                    )
+                    cursor.execute('''INSERT OR REPLACE INTO price_history 
+                                    (product_id, price, price_eur, price_usd, date)
+                                    VALUES (?, ?, ?, ?, ?)''',
+                                  (product_id, row['Close'], hist_price_eur, hist_price_usd, date.date()))
                 
                 conn.commit()
                 conn.close()
@@ -471,16 +786,34 @@ class PortfolioTracker:
             return False
     
     def get_price_history(self, symbol: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
-        """Récupère l'historique des prix pour un produit sur une période"""
+        """Récupère l'historique des prix pour un produit sur une période avec EUR et USD"""
         conn = sqlite3.connect(self.db_path)
-        query = '''
-            SELECT ph.date, ph.price
-            FROM price_history ph
-            JOIN financial_products fp ON ph.product_id = fp.id
-            WHERE fp.symbol = ? AND ph.date BETWEEN ? AND ?
-            ORDER BY ph.date
-        '''
-        df = pd.read_sql_query(query, conn, params=(symbol, start_date.date(), end_date.date()))
+        
+        # D'abord essayer avec les nouvelles colonnes
+        try:
+            query = '''
+                SELECT ph.date, ph.price, ph.price_eur, ph.price_usd
+                FROM price_history ph
+                JOIN financial_products fp ON ph.product_id = fp.id
+                WHERE fp.symbol = ? AND ph.date BETWEEN ? AND ?
+                ORDER BY ph.date
+            '''
+            df = pd.read_sql_query(query, conn, params=(symbol, start_date.date(), end_date.date()))
+        except sqlite3.OperationalError:
+            # Fallback vers l'ancienne structure si les nouvelles colonnes n'existent pas
+            query = '''
+                SELECT ph.date, ph.price
+                FROM price_history ph
+                JOIN financial_products fp ON ph.product_id = fp.id
+                WHERE fp.symbol = ? AND ph.date BETWEEN ? AND ?
+                ORDER BY ph.date
+            '''
+            df = pd.read_sql_query(query, conn, params=(symbol, start_date.date(), end_date.date()))
+            # Ajouter des colonnes vides pour la compatibilité
+            if not df.empty:
+                df['price_eur'] = None
+                df['price_usd'] = None
+        
         conn.close()
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
@@ -499,6 +832,9 @@ class PortfolioTracker:
                 t.transaction_type,
                 t.quantity,
                 t.price,
+                t.price_eur,
+                t.price_usd,
+                t.fees,
                 fp.symbol,
                 fp.name,
                 fp.product_type,
@@ -538,6 +874,24 @@ class PortfolioTracker:
         if transactions.empty:
             return pd.DataFrame()
         
+        # Récupérer les devises de tous les produits d'un coup
+        products_info = {}
+        unique_symbols = transactions['symbol'].unique()
+        for symbol in unique_symbols:
+            product_row = transactions[transactions['symbol'] == symbol].iloc[0]
+            # Récupérer la devise depuis la base
+            conn_temp = sqlite3.connect(self.db_path)
+            cursor_temp = conn_temp.cursor()
+            cursor_temp.execute("SELECT currency FROM financial_products WHERE symbol = ?", (symbol,))
+            currency_result = cursor_temp.fetchone()
+            conn_temp.close()
+            
+            products_info[symbol] = {
+                'currency': currency_result[0] if currency_result else 'EUR',
+                'name': product_row['name'],
+                'product_type': product_row['product_type']
+            }
+        
         # Générer les dates pour l'évolution (fréquence adaptée à la période)
         total_days = (end_date - start_date).days
         total_hours = (end_date - start_date).total_seconds() / 3600
@@ -549,7 +903,7 @@ class PortfolioTracker:
         elif total_days <= 30:
             freq = 'D'   # Quotidien pour 1 mois
         else:
-            freq = 'D'   # Quotidien pour les autres
+            freq = 'W'   # Hebdomadaire pour plus de 30 jours (meilleur scaling)
             
         date_range = pd.date_range(start=start_date, end=end_date, freq=freq)
         evolution_data = []
@@ -572,6 +926,8 @@ class PortfolioTracker:
                 evolution_data.append({
                     'date': current_date,
                     'total_value': 0,
+                    'total_invested': 0,
+                    'gain_loss': 0,
                     'breakdown_account': {},
                     'breakdown_platform': {},
                     'breakdown_asset_class': {},
@@ -581,6 +937,7 @@ class PortfolioTracker:
             
             # Calculer les positions à cette date
             positions = {}
+            
             for _, trans in trans_to_date.iterrows():
                 symbol = trans['symbol']
                 if symbol not in positions:
@@ -590,35 +947,80 @@ class PortfolioTracker:
                         'name': trans['name'],
                         'product_type': trans['product_type'],
                         'account_name': trans['account_name'],
-                        'platform_name': trans['platform_name']
+                        'platform_name': trans['platform_name'],
+                        'invested_amount': 0
                     }
+                
+                # Récupérer la devise du produit
+                product_currency = products_info.get(symbol, {}).get('currency', 'EUR')
                 
                 if trans['transaction_type'] == 'BUY':
                     positions[symbol]['quantity'] += trans['quantity']
+                    # Ajouter le montant investi (prix + frais, convertis en EUR)
+                    
+                    # Utiliser price_eur si disponible, sinon convertir
+                    if 'price_eur' in trans and pd.notna(trans['price_eur']):
+                        price_eur = trans['price_eur']
+                    else:
+                        # Conversion du prix original
+                        product_currency = products_info.get(symbol, {}).get('currency', 'EUR')
+                        price_eur = self.currency_converter.convert_to_eur(trans['price'], product_currency)
+                    
+                    invested_eur = trans['quantity'] * price_eur + (trans['fees'] if pd.notna(trans.get('fees')) else 0)
+                    positions[symbol]['invested_amount'] += invested_eur
                 else:  # SELL
+                    # Calculer le ratio vendu
+                    if positions[symbol]['quantity'] > 0:
+                        ratio_sold = trans['quantity'] / positions[symbol]['quantity']
+                        # Réduire proportionnellement le montant investi
+                        positions[symbol]['invested_amount'] *= (1 - ratio_sold)
+                    
                     positions[symbol]['quantity'] -= trans['quantity']
+                    
+                    # Si la quantité devient négative, remettre à 0
+                    if positions[symbol]['quantity'] < 0:
+                        positions[symbol]['quantity'] = 0
+                        positions[symbol]['invested_amount'] = 0
+            
+            # Calculer le montant total investi à cette date
+            total_invested_to_date = sum(pos['invested_amount'] for pos in positions.values() if pos['quantity'] > 0)
             
             # Récupérer les prix pour cette date
             for symbol, position in positions.items():
                 if position['quantity'] > 0:
-                    # Chercher le prix le plus proche de cette date
+                    # Chercher le prix EUR le plus proche de cette date
                     price_history = self.get_price_history(symbol, current_date - timedelta(days=7), current_date)
+                    closest_price_eur = None
+                    
                     if not price_history.empty:
-                        closest_price = price_history.iloc[-1]['price']
+                        # Utiliser directement le prix EUR de l'historique si disponible
+                        if 'price_eur' in price_history.columns and pd.notna(price_history.iloc[-1]['price_eur']):
+                            closest_price_eur = price_history.iloc[-1]['price_eur']
+                        else:
+                            # Fallback au prix original avec conversion
+                            closest_price = price_history.iloc[-1]['price']
+                            if pd.notna(closest_price):
+                                product_currency = products_info.get(symbol, {}).get('currency', 'EUR')
+                                closest_price_eur = self.currency_converter.convert_to_eur(closest_price, product_currency)
                     else:
-                        # Si pas d'historique, utiliser le prix actuel du produit
+                        # Si pas d'historique, utiliser le prix EUR actuel du produit
                         conn_temp = sqlite3.connect(self.db_path)
                         cursor_temp = conn_temp.cursor()
-                        cursor_temp.execute("SELECT current_price FROM financial_products WHERE symbol = ?", (symbol,))
+                        cursor_temp.execute("SELECT current_price_eur, current_price, currency FROM financial_products WHERE symbol = ?", (symbol,))
                         result = cursor_temp.fetchone()
                         conn_temp.close()
-                        if result and result[0]:
-                            closest_price = result[0]
-                        else:
-                            closest_price = 0  # Pas de prix disponible
+                        
+                        if result:
+                            current_price_eur, current_price, currency = result
+                            if current_price_eur and pd.notna(current_price_eur):
+                                closest_price_eur = current_price_eur
+                            elif current_price and pd.notna(current_price):
+                                # Conversion du prix original
+                                product_currency = currency or 'EUR'
+                                closest_price_eur = self.currency_converter.convert_to_eur(current_price, product_currency)
                     
-                    if closest_price > 0:
-                        value = position['quantity'] * closest_price
+                    if closest_price_eur and closest_price_eur > 0:
+                        value = position['quantity'] * closest_price_eur
                         daily_value += value
                         
                         # Breakdown par catégorie
@@ -646,6 +1048,8 @@ class PortfolioTracker:
             evolution_data.append({
                 'date': current_date,
                 'total_value': daily_value,
+                'total_invested': total_invested_to_date,
+                'gain_loss': daily_value - total_invested_to_date,
                 'breakdown_account': daily_breakdown['account'],
                 'breakdown_platform': daily_breakdown['platform'],
                 'breakdown_asset_class': daily_breakdown['asset_class'],
@@ -702,7 +1106,7 @@ class PortfolioTracker:
         status_text.empty()
     
     def initialize_price_history(self, days: int = 365):
-        """Initialise l'historique des prix pour tous les produits"""
+        """Initialise l'historique des prix pour tous les produits avec conversion EUR/USD"""
         products = self.get_financial_products()
         if products.empty:
             return
@@ -724,18 +1128,24 @@ class PortfolioTracker:
                     # Nettoyer l'ancien historique
                     cursor.execute("DELETE FROM price_history WHERE product_id = ?", (row['id'],))
                     
-                    # Ajouter le nouvel historique
+                    # Ajouter le nouvel historique avec conversion
                     for date, row_data in hist.iterrows():
-                        cursor.execute('''INSERT INTO price_history (product_id, price, date)
-                                        VALUES (?, ?, ?)''',
-                                      (row['id'], row_data['Close'], date.date()))
+                        price_eur, price_usd = self.currency_converter.convert_price_to_both(
+                            row_data['Close'], row['currency']
+                        )
+                        cursor.execute('''INSERT INTO price_history (product_id, price, price_eur, price_usd, date)
+                                        VALUES (?, ?, ?, ?, ?)''',
+                                      (row['id'], row_data['Close'], price_eur, price_usd, date.date()))
                     
-                    # Mettre à jour le prix actuel
+                    # Mettre à jour le prix actuel avec conversion
                     current_price = hist['Close'].iloc[-1]
+                    current_price_eur, current_price_usd = self.currency_converter.convert_price_to_both(
+                        current_price, row['currency']
+                    )
                     cursor.execute('''UPDATE financial_products 
-                                    SET current_price = ?, last_updated = ?
+                                    SET current_price = ?, current_price_eur = ?, current_price_usd = ?, last_updated = ?
                                     WHERE id = ?''',
-                                  (current_price, datetime.now(), row['id']))
+                                  (current_price, current_price_eur, current_price_usd, datetime.now(), row['id']))
                     
                     conn.commit()
                     conn.close()
@@ -755,44 +1165,160 @@ class PortfolioTracker:
         st.success("🎉 Initialisation de l'historique terminée!")
     
     def get_portfolio_summary(self) -> pd.DataFrame:
-        """Calcule le résumé du portefeuille"""
+        """Calcule le résumé du portefeuille en utilisant les prix EUR stockés"""
         conn = sqlite3.connect(self.db_path)
-        query = '''
-            SELECT 
-                fp.symbol,
-                fp.name,
-                fp.current_price,
-                fp.currency,
-                fp.product_type,
-                a.name as account_name,
-                p.name as platform_name,
-                SUM(CASE WHEN t.transaction_type = 'BUY' THEN t.quantity 
-                         WHEN t.transaction_type = 'SELL' THEN -t.quantity 
-                         ELSE 0 END) as total_quantity,
-                AVG(CASE WHEN t.transaction_type = 'BUY' THEN t.price ELSE NULL END) as avg_buy_price,
-                SUM(CASE WHEN t.transaction_type = 'BUY' THEN t.quantity * t.price + t.fees
-                         WHEN t.transaction_type = 'SELL' THEN -t.quantity * t.price - t.fees
-                         ELSE 0 END) as total_invested
-            FROM transactions t
-            JOIN financial_products fp ON t.product_id = fp.id
-            JOIN accounts a ON t.account_id = a.id
-            JOIN platforms p ON a.platform_id = p.id
-            GROUP BY fp.symbol, a.id
-            HAVING total_quantity > 0
-        '''
-        df = pd.read_sql_query(query, conn)
+        
+        # Essayer d'abord avec les nouvelles colonnes
+        try:
+            query = '''
+                SELECT 
+                    fp.symbol,
+                    fp.name,
+                    fp.current_price,
+                    fp.current_price_eur,
+                    fp.current_price_usd,
+                    fp.currency,
+                    fp.product_type,
+                    a.name as account_name,
+                    p.name as platform_name,
+                    SUM(CASE WHEN t.transaction_type = 'BUY' THEN t.quantity 
+                             WHEN t.transaction_type = 'SELL' THEN -t.quantity 
+                             ELSE 0 END) as total_quantity,
+                    AVG(CASE WHEN t.transaction_type = 'BUY' THEN COALESCE(t.price_eur, t.price) ELSE NULL END) as avg_buy_price_eur,
+                    SUM(CASE WHEN t.transaction_type = 'BUY' THEN t.quantity * COALESCE(t.price_eur, t.price) + COALESCE(t.fees, 0)
+                             WHEN t.transaction_type = 'SELL' THEN -t.quantity * COALESCE(t.price_eur, t.price) - COALESCE(t.fees, 0)
+                             ELSE 0 END) as total_invested_eur
+                FROM transactions t
+                JOIN financial_products fp ON t.product_id = fp.id
+                JOIN accounts a ON t.account_id = a.id
+                JOIN platforms p ON a.platform_id = p.id
+                GROUP BY fp.symbol, a.id
+                HAVING total_quantity > 0
+            '''
+            df = pd.read_sql_query(query, conn)
+            
+        except sqlite3.OperationalError:
+            # Fallback vers l'ancienne structure
+            query = '''
+                SELECT 
+                    fp.symbol,
+                    fp.name,
+                    fp.current_price,
+                    fp.currency,
+                    fp.product_type,
+                    a.name as account_name,
+                    p.name as platform_name,
+                    SUM(CASE WHEN t.transaction_type = 'BUY' THEN t.quantity 
+                             WHEN t.transaction_type = 'SELL' THEN -t.quantity 
+                             ELSE 0 END) as total_quantity,
+                    AVG(CASE WHEN t.transaction_type = 'BUY' THEN t.price ELSE NULL END) as avg_buy_price,
+                    SUM(CASE WHEN t.transaction_type = 'BUY' THEN t.quantity * t.price + COALESCE(t.fees, 0)
+                             WHEN t.transaction_type = 'SELL' THEN -t.quantity * t.price - COALESCE(t.fees, 0)
+                             ELSE 0 END) as total_invested
+                FROM transactions t
+                JOIN financial_products fp ON t.product_id = fp.id
+                JOIN accounts a ON t.account_id = a.id
+                JOIN platforms p ON a.platform_id = p.id
+                GROUP BY fp.symbol, a.id
+                HAVING total_quantity > 0
+            '''
+            df = pd.read_sql_query(query, conn)
+            
+            if not df.empty:
+                # Pas de nouvelles colonnes, utiliser l'ancien système entièrement
+                self.currency_converter.get_eur_usd_rate()
+                
+                df['current_price_eur'] = df.apply(
+                    lambda row: self.currency_converter.convert_to_eur(row['current_price'], row['currency']),
+                    axis=1
+                )
+                df['avg_buy_price_eur'] = df.apply(
+                    lambda row: self.currency_converter.convert_to_eur(row['avg_buy_price'], row['currency']),
+                    axis=1
+                )
+                df['total_invested_eur'] = df.apply(
+                    lambda row: self.currency_converter.convert_to_eur(row['total_invested'], row['currency']),
+                    axis=1
+                )
+        
         conn.close()
         
         if not df.empty:
-            df['current_value'] = df['total_quantity'] * df['current_price']
-            df['gain_loss'] = df['current_value'] - df['total_invested']
-            df['gain_loss_pct'] = (df['gain_loss'] / df['total_invested']) * 100
+            # Utiliser les prix EUR stockés (ou convertis)
+            if 'current_price_eur' in df.columns and df['current_price_eur'].notna().any():
+                # Remplacer les None par une conversion à la volée
+                df['current_price_eur'] = df.apply(
+                    lambda row: row['current_price_eur'] if pd.notna(row['current_price_eur']) 
+                    else self.currency_converter.convert_to_eur(row['current_price'], row['currency']),
+                    axis=1
+                )
+                df['current_value'] = df['total_quantity'] * df['current_price_eur']
+            else:
+                # Fallback pour l'ancienne structure - conversion à la volée
+                df['current_price_eur'] = df.apply(
+                    lambda row: self.currency_converter.convert_to_eur(row['current_price'], row['currency']),
+                    axis=1
+                )
+                df['current_value'] = df['total_quantity'] * df['current_price_eur']
+            
+            # Gérer les montants investis
+            if 'total_invested_eur' in df.columns:
+                # Remplacer les None par une conversion
+                df['total_invested_eur'] = df.apply(
+                    lambda row: row['total_invested_eur'] if pd.notna(row['total_invested_eur'])
+                    else self.currency_converter.convert_to_eur(row.get('total_invested', 0), row['currency']),
+                    axis=1
+                )
+            else:
+                # Utiliser l'ancien système
+                df['total_invested_eur'] = df.apply(
+                    lambda row: self.currency_converter.convert_to_eur(row.get('total_invested', 0), row['currency']),
+                    axis=1
+                )
+            
+            # Gérer les prix d'achat moyens
+            if 'avg_buy_price_eur' in df.columns:
+                df['avg_buy_price_eur'] = df.apply(
+                    lambda row: row['avg_buy_price_eur'] if pd.notna(row['avg_buy_price_eur'])
+                    else self.currency_converter.convert_to_eur(row.get('avg_buy_price', 0), row['currency']),
+                    axis=1
+                )
+            else:
+                df['avg_buy_price_eur'] = df.apply(
+                    lambda row: self.currency_converter.convert_to_eur(row.get('avg_buy_price', 0), row['currency']),
+                    axis=1
+                )
+            
+            # Calculs finaux
+            df['gain_loss'] = df['current_value'] - df['total_invested_eur']
+            df['gain_loss_pct'] = df.apply(
+                lambda row: (row['gain_loss'] / row['total_invested_eur']) * 100 
+                if row['total_invested_eur'] > 0 else 0, 
+                axis=1
+            )
+            
+            # Colonnes pour compatibilité
+            df['total_invested'] = df['total_invested_eur']
+            df['avg_buy_price'] = df['avg_buy_price_eur']
+            
+            # Remplacer tous les None par 0 pour éviter les erreurs d'affichage
+            df = df.fillna(0)
         
         return df
 
 # Interface Streamlit
 def main():
     tracker = PortfolioTracker()
+    
+    # Initialiser les taux de change EUR/USD au démarrage avec feedback
+    if 'rates_initialized' not in st.session_state:
+        with st.spinner("🔄 Récupération du taux de change EUR/USD..."):
+            success = tracker.currency_converter.get_eur_usd_rate(show_debug=True)
+            if success:
+                st.success(f"✅ Taux EUR/USD récupéré: 1 EUR = {tracker.currency_converter.eur_usd_rate:.4f} USD")
+            else:
+                st.warning("⚠️ Utilisation d'un taux de secours EUR/USD")
+        st.session_state.rates_initialized = True
     
     # Sidebar pour la navigation
     st.sidebar.title("📊 Navigation")
@@ -816,6 +1342,9 @@ def dashboard_page(tracker):
     st.title("🏠 Tableau de Bord")
     
     col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.caption("💱 Tous les prix sont stockés en EUR et USD - Calculs en EUR")
     
     with col2:
         if st.button("🔄 Actualiser tous les prix"):
@@ -855,26 +1384,11 @@ def dashboard_page(tracker):
         conn.close()
         
         if history_count > 0:
-            # Sélecteur de période pour l'évolution rapide
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.subheader("📈 Évolution récente")
-            with col2:
-                quick_period = st.selectbox("Période", 
-                                          ["1 jour", "7 jours", "30 jours"], 
-                                          index=1, key="dashboard_period")  # Par défaut : 7 jours
+            # Évolution sur 1 an par défaut
+            st.subheader("📈 Évolution (1 an)")
             
-            # Calculer la période sélectionnée
             end_date = datetime.now()
-            if quick_period == "1 jour":
-                start_date = end_date - timedelta(days=1)
-                period_label = "24h"
-            elif quick_period == "7 jours":
-                start_date = end_date - timedelta(days=7)
-                period_label = "7j"
-            else:  # 30 jours
-                start_date = end_date - timedelta(days=30)
-                period_label = "30j"
+            start_date = end_date - timedelta(days=365)  # 1 an par défaut
             
             evolution_data = tracker.get_portfolio_evolution(start_date, end_date)
             
@@ -885,111 +1399,43 @@ def dashboard_page(tracker):
                 variation = last_value - first_value
                 variation_pct = (variation / first_value) * 100 if first_value > 0 else 0
                 
-                col1, col2 = st.columns([3, 1])
+                col1, col2 = st.columns([4, 1])
                 
                 with col1:
-                    # Option d'affichage pour le dashboard
-                    show_breakdown = st.checkbox("🌈 Affichage par comptes", 
-                                               help="Cochez pour voir la répartition par comptes")
-                    
-                    if show_breakdown:
-                        # Graphique empilé par comptes
-                        # Collecter toutes les catégories de comptes
-                        all_accounts = set()
-                        for _, row in evolution_data.iterrows():
-                            if isinstance(row['breakdown_account'], dict):
-                                all_accounts.update(row['breakdown_account'].keys())
-                        
-                        all_accounts = sorted(list(all_accounts))
-                        
-                        if all_accounts:
-                            # Préparer les données pour chaque compte
-                            account_data = {}
-                            for account in all_accounts:
-                                account_data[account] = []
-                                for _, row in evolution_data.iterrows():
-                                    breakdown = row['breakdown_account'] if isinstance(row['breakdown_account'], dict) else {}
-                                    account_data[account].append(breakdown.get(account, 0))
-                            
-                            # Créer le graphique empilé
-                            fig_quick = go.Figure()
-                            
-                            # Couleurs cohérentes pour les comptes
-                            colors = [
-                                '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
-                                '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
-                            ]
-                            
-                            for i, account in enumerate(all_accounts):
-                                color = colors[i % len(colors)]
-                                
-                                fig_quick.add_trace(go.Scatter(
-                                    x=evolution_data['date'],
-                                    y=account_data[account],
-                                    mode='lines',
-                                    name=account,
-                                    stackgroup='one',
-                                    line=dict(width=0.5),
-                                    fillcolor=color,
-                                    hovertemplate=f'<b>{account}</b><br>' + 
-                                                '%{x}<br>Valeur: %{y:,.2f} €<extra></extra>'
-                                ))
-                        else:
-                            # Fallback vers graphique simple
-                            fig_quick = go.Figure()
-                            fig_quick.add_trace(go.Scatter(
-                                x=evolution_data['date'],
-                                y=evolution_data['total_value'],
-                                mode='lines',
-                                name='Valeur du portefeuille',
-                                line=dict(color='#1f77b4', width=2),
-                                hovertemplate='<b>%{x}</b><br>Valeur: %{y:,.2f} €<extra></extra>'
-                            ))
-                    else:
-                        # Graphique simple
-                        fig_quick = go.Figure()
-                        fig_quick.add_trace(go.Scatter(
-                            x=evolution_data['date'],
-                            y=evolution_data['total_value'],
-                            mode='lines',
-                            name='Valeur du portefeuille',
-                            line=dict(color='#1f77b4', width=2),
-                            fill='tonexty',
-                            hovertemplate='<b>%{x}</b><br>Valeur: %{y:,.2f} €<extra></extra>'
-                        ))
+                    # Graphique simple et épuré
+                    fig_quick = go.Figure()
+                    fig_quick.add_trace(go.Scatter(
+                        x=evolution_data['date'],
+                        y=evolution_data['total_value'],
+                        mode='lines',
+                        name='Valeur du portefeuille',
+                        line=dict(color='#1f77b4', width=3),
+                        fill='tonexty',
+                        hovertemplate='<b>%{x}</b><br>Valeur: %{y:,.2f} €<extra></extra>'
+                    ))
                     
                     fig_quick.update_layout(
-                        title=f"Évolution de la valeur ({period_label})",
                         xaxis_title="Date",
                         yaxis_title="Valeur (€)",
-                        height=350,
-                        showlegend=show_breakdown,
-                        legend=dict(
-                            orientation="h",
-                            yanchor="bottom",
-                            y=1.02,
-                            xanchor="right",
-                            x=1
-                        ) if show_breakdown else None
+                        height=400,
+                        showlegend=False,
+                        margin=dict(l=0, r=0, t=20, b=0),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)'
                     )
+                    
+                    # Améliorer la lisibilité des axes
+                    fig_quick.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+                    fig_quick.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
                     
                     st.plotly_chart(fig_quick, use_container_width=True)
                 
                 with col2:
-                    st.metric(f"📊 Variation {period_label}", 
+                    st.metric("📊 Variation 1 an", 
                              f"{variation:,.2f} €",
                              delta=f"{variation_pct:.2f}%")
-                    
-                    # Top/Flop performers
-                    st.write("**🏆 Top performer:**")
-                    top_performer = portfolio.loc[portfolio['gain_loss_pct'].idxmax()]
-                    st.write(f"{top_performer['symbol']}: +{top_performer['gain_loss_pct']:.1f}%")
-                    
-                    st.write("**📉 Flop performer:**")
-                    flop_performer = portfolio.loc[portfolio['gain_loss_pct'].idxmin()]
-                    st.write(f"{flop_performer['symbol']}: {flop_performer['gain_loss_pct']:.1f}%")
             else:
-                st.info(f"📊 Pas assez de données pour afficher l'évolution sur {period_label}.")
+                st.info("📊 Pas assez de données pour afficher l'évolution sur 1 an.")
         else:
             st.info("🔧 Pour voir les courbes d'évolution, initialisez l'historique des prix dans la Configuration.")
         
@@ -998,34 +1444,24 @@ def dashboard_page(tracker):
         
         with col1:
             st.subheader("🥧 Répartition par produit")
-            fig_pie = px.pie(portfolio, values='current_value', names='symbol',
-                            title="Répartition par produit financier")
+            fig_pie = px.pie(portfolio, values='current_value', names='name',
+                            title="")
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            fig_pie.update_layout(height=400, margin=dict(l=0, r=0, t=0, b=0))
             st.plotly_chart(fig_pie, use_container_width=True)
         
         with col2:
             st.subheader("🏢 Répartition par plateforme")
             platform_summary = portfolio.groupby('platform_name')['current_value'].sum().reset_index()
             fig_platform = px.bar(platform_summary, x='platform_name', y='current_value',
-                                 title="Répartition par plateforme")
-            fig_platform.update_layout(xaxis_tickangle=-45)
+                                 title="")
+            fig_platform.update_layout(
+                height=400, 
+                margin=dict(l=0, r=0, t=0, b=0),
+                xaxis_tickangle=-45,
+                showlegend=False
+            )
             st.plotly_chart(fig_platform, use_container_width=True)
-        
-        # Tableau des meilleures/pires performances
-        st.subheader("🎯 Performances du portefeuille")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**🏆 Meilleures performances**")
-            top_performers = portfolio.nlargest(5, 'gain_loss_pct')[['symbol', 'name', 'gain_loss_pct']]
-            st.dataframe(top_performers.style.format({'gain_loss_pct': '{:.2f}%'}), 
-                        hide_index=True, use_container_width=True)
-        
-        with col2:
-            st.write("**📉 Performances à surveiller**")
-            worst_performers = portfolio.nsmallest(5, 'gain_loss_pct')[['symbol', 'name', 'gain_loss_pct']]
-            st.dataframe(worst_performers.style.format({'gain_loss_pct': '{:.2f}%'}), 
-                        hide_index=True, use_container_width=True)
         
         # Affichage des transactions récentes
         st.subheader("📋 Transactions récentes")
@@ -1078,54 +1514,42 @@ def dashboard_page(tracker):
 
 def portfolio_page(tracker):
     st.title("📈 Suivi de Portefeuille Avancé")
+    st.caption("💱 Tous les prix sont stockés en EUR et USD - Vous pouvez saisir vos transactions dans l'une ou l'autre devise")
     
     # Sidebar pour les filtres
     with st.sidebar:
         st.subheader("🔍 Filtres")
         
-        # Sélection de la période
+        # Sélection de la période (suppression de l'option personnalisée)
         st.write("**📅 Période d'analyse**")
-        period_type = st.selectbox("Type de période", 
-                                  ["Prédéfinie", "Personnalisée"])
+        period = st.selectbox("Période", 
+                            ["1 jour", "7 jours", "1 mois", "3 mois", "6 mois", "1 an", "2 ans"],
+                            index=5)  # Par défaut : 1 an
         
-        if period_type == "Prédéfinie":
-            period = st.selectbox("Période", 
-                                ["1 jour", "7 jours", "1 mois", "3 mois", "6 mois", "1 an", "2 ans"],
-                                index=1)  # Par défaut : 7 jours
-            
-            end_date = datetime.now()
-            if period == "1 jour":
-                start_date = end_date - timedelta(days=1)
-            elif period == "7 jours":
-                start_date = end_date - timedelta(days=7)
-            elif period == "1 mois":
-                start_date = end_date - timedelta(days=30)
-            elif period == "3 mois":
-                start_date = end_date - timedelta(days=90)
-            elif period == "6 mois":
-                start_date = end_date - timedelta(days=180)
-            elif period == "1 an":
-                start_date = end_date - timedelta(days=365)
-            else:  # 2 ans
-                start_date = end_date - timedelta(days=730)
-        else:
-            col1, col2 = st.columns(2)
-            with col1:
-                start_date = st.date_input("Date début", 
-                                         value=datetime.now() - timedelta(days=365))
-            with col2:
-                end_date = st.date_input("Date fin", 
-                                       value=datetime.now())
-            start_date = datetime.combine(start_date, datetime.min.time())
-            end_date = datetime.combine(end_date, datetime.max.time())
+        end_date = datetime.now()
+        if period == "1 jour":
+            start_date = end_date - timedelta(days=1)
+        elif period == "7 jours":
+            start_date = end_date - timedelta(days=7)
+        elif period == "1 mois":
+            start_date = end_date - timedelta(days=30)
+        elif period == "3 mois":
+            start_date = end_date - timedelta(days=90)
+        elif period == "6 mois":
+            start_date = end_date - timedelta(days=180)
+        elif period == "1 an":
+            start_date = end_date - timedelta(days=365)
+        else:  # 2 ans
+            start_date = end_date - timedelta(days=730)
         
         st.divider()
         
-        # Options d'affichage des courbes
+        # Options d'affichage des courbes (répartition cumulative par défaut)
         st.write("**📈 Options d'affichage**")
         chart_type = st.radio("Type de graphique", 
-                             ["📊 Valeur totale", "🌈 Répartition cumulative"],
-                             help="Valeur totale: courbe simple | Répartition cumulative: courbe empilée par catégorie")
+                             ["🌈 Répartition cumulative", "📊 Valeur totale", "💰 Investissement vs Plus/Moins Value"],
+                             index=0,  # Répartition cumulative par défaut
+                             help="Répartition cumulative: courbe empilée par catégorie | Valeur totale: courbe simple | Investissement vs +/- Value: évolution des montants investis et gains/pertes")
         
         if chart_type == "🌈 Répartition cumulative":
             breakdown_by = st.selectbox("Répartition par", 
@@ -1198,9 +1622,6 @@ def portfolio_page(tracker):
         # Bouton de mise à jour
         if st.button("🔄 Actualiser l'analyse"):
             st.rerun()
-    
-    # Récupérer les valeurs des options d'affichage depuis la sidebar
-    # (Les valeurs par défaut sont définies dans la sidebar)
     
     # Contenu principal
     portfolio = tracker.get_portfolio_summary()
@@ -1289,6 +1710,81 @@ def portfolio_page(tracker):
                 hovermode='x unified',
                 showlegend=False,
                 height=500
+            )
+            
+            # Variables pour la section drill-down
+            all_categories = []
+            
+        elif chart_type == "💰 Investissement vs Plus/Moins Value":
+            # Graphique avec montant investi et plus/moins value
+            fig_evolution = go.Figure()
+            
+            # Courbe du montant investi
+            fig_evolution.add_trace(go.Scatter(
+                x=evolution_data['date'],
+                y=evolution_data['total_invested'],
+                mode='lines',
+                name='Montant investi',
+                line=dict(color='#2E86AB', width=3),
+                hovertemplate='<b>%{x}</b><br>Investi: %{y:,.2f} €<extra></extra>',
+                fill='tonexty'
+            ))
+            
+            # Courbe de la valeur actuelle
+            fig_evolution.add_trace(go.Scatter(
+                x=evolution_data['date'],
+                y=evolution_data['total_value'],
+                mode='lines',
+                name='Valeur actuelle',
+                line=dict(color='#A23B72', width=3),
+                hovertemplate='<b>%{x}</b><br>Valeur: %{y:,.2f} €<extra></extra>'
+            ))
+            
+            # Zone de gain/perte (remplissage entre les courbes)
+            fig_evolution.add_trace(go.Scatter(
+                x=evolution_data['date'],
+                y=evolution_data['total_value'],
+                mode='lines',
+                line=dict(color='rgba(0,0,0,0)'),
+                fill='tonexty',
+                fillcolor='rgba(76, 175, 80, 0.3)',  # Vert transparent pour les gains
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+            
+            # Ligne de la plus/moins value (optionnel, pour plus de clarté)
+            fig_evolution.add_trace(go.Scatter(
+                x=evolution_data['date'],
+                y=evolution_data['gain_loss'],
+                mode='lines',
+                name='Plus/Moins Value',
+                line=dict(color='#F18F01', width=2, dash='dash'),
+                hovertemplate='<b>%{x}</b><br>+/- Value: %{y:,.2f} €<extra></extra>',
+                yaxis='y2'  # Axe secondaire pour la plus/moins value
+            ))
+            
+            fig_evolution.update_layout(
+                title="Évolution : Investissement vs Valeur Actuelle",
+                xaxis_title="Date",
+                yaxis_title="Montant (€)",
+                yaxis2=dict(
+                    title="Plus/Moins Value (€)",
+                    overlaying='y',
+                    side='right',
+                    zeroline=True,
+                    zerolinewidth=2,
+                    zerolinecolor='gray'
+                ),
+                hovermode='x unified',
+                showlegend=True,
+                height=600,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
             )
             
             # Variables pour la section drill-down
@@ -1498,9 +1994,12 @@ def portfolio_page(tracker):
                     # Créer le DataFrame pour ce compte
                     account_df = account_positions[[
                         'symbol', 'name', 'product_type', 'total_quantity', 
-                        'avg_buy_price', 'current_price', 'current_value', 
+                        'avg_buy_price_eur', 'current_price_eur', 'current_value', 
                         'total_invested', 'gain_loss', 'gain_loss_pct'
                     ]].copy()
+                    
+                    # Remplacer les None par 0 pour éviter les erreurs de formatage
+                    account_df = account_df.fillna(0)
                     
                     # Ajouter des emojis selon le type de produit
                     def add_emoji_to_symbol(row):
@@ -1520,7 +2019,7 @@ def portfolio_page(tracker):
                     # Renommer les colonnes pour l'affichage
                     display_df = account_df[[
                         'symbol_with_emoji', 'name', 'product_type', 'total_quantity', 
-                        'avg_buy_price', 'current_price', 'current_value', 
+                        'avg_buy_price_eur', 'current_price_eur', 'current_value', 
                         'total_invested', 'gain_loss', 'gain_loss_pct'
                     ]].copy()
                     
@@ -1568,10 +2067,10 @@ def portfolio_page(tracker):
         st.subheader("📋 Positions actuelles")
         st.dataframe(
             filtered_portfolio[['symbol', 'name', 'platform_name', 'account_name', 
-                              'total_quantity', 'avg_buy_price', 'current_price', 
+                              'total_quantity', 'avg_buy_price', 'current_price_eur', 
                               'current_value', 'gain_loss', 'gain_loss_pct']].style.format({
                 'avg_buy_price': '{:.2f} €',
-                'current_price': '{:.2f} €',
+                'current_price_eur': '{:.2f} €',
                 'current_value': '{:.2f} €',
                 'gain_loss': '{:.2f} €',
                 'gain_loss_pct': '{:.2f}%'
@@ -1812,7 +2311,15 @@ def accounts_page(tracker):
             # Affichage des produits avec options de modification
             for idx, product in products.iterrows():
                 status_icon = "✅" if pd.notna(product['current_price']) else "⚠️"
-                price_info = f" - {product['current_price']:.2f} {product['currency']}" if pd.notna(product['current_price']) else " - Prix non disponible"
+                
+                # Affichage des prix EUR et USD
+                price_info = ""
+                if pd.notna(product['current_price_eur']) and pd.notna(product['current_price_usd']):
+                    price_info = f" - {product['current_price_eur']:.2f} EUR / {product['current_price_usd']:.2f} USD"
+                elif pd.notna(product['current_price']):
+                    price_info = f" - {product['current_price']:.2f} {product['currency']}"
+                else:
+                    price_info = " - Prix non disponible"
                 
                 with st.expander(f"{status_icon} {product['symbol']} - {product['name']}{price_info}"):
                     col1, col2 = st.columns([3, 1])
@@ -1875,13 +2382,22 @@ def accounts_page(tracker):
                         # Informations actuelles
                         st.write("**Informations actuelles :**")
                         st.write(f"**Type :** {product['product_type']}")
-                        st.write(f"**Devise :** {product['currency']}")
+                        st.write(f"**Devise native :** {product['currency']}")
+                        
                         if pd.notna(product['current_price']):
-                            st.write(f"**Prix actuel :** {product['current_price']:.2f} {product['currency']}")
-                            if pd.notna(product['last_updated']):
-                                update_date = pd.to_datetime(product['last_updated'])
-                                st.write(f"**Dernière MAJ :** {update_date.strftime('%d/%m/%Y %H:%M')}")
-                        else:
+                            st.write(f"**Prix natif :** {product['current_price']:.2f} {product['currency']}")
+                        
+                        if pd.notna(product['current_price_eur']):
+                            st.write(f"**Prix EUR :** {product['current_price_eur']:.2f} EUR")
+                        
+                        if pd.notna(product['current_price_usd']):
+                            st.write(f"**Prix USD :** {product['current_price_usd']:.2f} USD")
+                        
+                        if pd.notna(product['last_updated']):
+                            update_date = pd.to_datetime(product['last_updated'])
+                            st.write(f"**Dernière MAJ :** {update_date.strftime('%d/%m/%Y %H:%M')}")
+                        
+                        if pd.isna(product['current_price']):
                             st.warning("⚠️ Prix non disponible")
                         
                         # Bouton de mise à jour du prix
@@ -1901,6 +2417,7 @@ def accounts_page(tracker):
 
 def transaction_page(tracker):
     st.title("💸 Gestion des Transactions")
+    st.caption("💡 Vous pouvez maintenant saisir vos prix d'achat en EUR ou USD - La conversion est automatique")
     
     # Onglets pour séparer nouvelle transaction et gestion
     tab1, tab2 = st.tabs(["🛒 Nouvelle Transaction", "📋 Gérer les Transactions"])
@@ -1928,17 +2445,31 @@ def transaction_page(tracker):
                                             format_func=lambda x: f"{x} - {products[products['symbol']==x]['name'].iloc[0]}")
                 
                 transaction_type = st.selectbox("Type", ["BUY", "SELL"])
+                
+                # Afficher les prix actuels du produit sélectionné
+                if product_choice:
+                    selected_product = products[products['symbol'] == product_choice].iloc[0]
+                    if pd.notna(selected_product['current_price_eur']) and pd.notna(selected_product['current_price_usd']):
+                        st.info(f"💰 Prix actuel: {selected_product['current_price_eur']:.2f} EUR / {selected_product['current_price_usd']:.2f} USD")
             
             with col2:
                 quantity = st.number_input("Quantité", min_value=0.0, step=0.1)
-                price = st.number_input("Prix unitaire", min_value=0.0, step=0.01)
-                fees = st.number_input("Frais", min_value=0.0, step=0.01, value=0.0)
+                
+                # Choix de la devise pour le prix
+                price_currency = st.selectbox("Devise du prix d'achat", ["EUR", "USD"], 
+                                            help="Choisissez la devise dans laquelle vous voulez saisir le prix")
+                
+                price = st.number_input(f"Prix unitaire ({price_currency})", min_value=0.0, step=0.01)
+                
+                fees = st.number_input("Frais (EUR)", min_value=0.0, step=0.01, value=0.0,
+                                     help="Les frais sont toujours saisis en EUR")
                 transaction_date = st.date_input("Date de transaction", value=datetime.now().date())
             
             if st.form_submit_button("Ajouter la transaction", type="primary"):
                 tracker.add_transaction(account_choice, product_choice, transaction_type,
-                                      quantity, price, datetime.combine(transaction_date, datetime.min.time()), fees)
-                st.success("Transaction ajoutée!")
+                                      quantity, price, price_currency, 
+                                      datetime.combine(transaction_date, datetime.min.time()), fees)
+                st.success(f"Transaction ajoutée! Prix: {price:.2f} {price_currency}")
                 st.rerun()
     
     with tab2:
@@ -2132,9 +2663,17 @@ def transaction_page(tracker):
                         st.write(f"**Produit :** {transaction['product_name']}")
                         st.write(f"**Type :** {transaction['transaction_type']}")
                         st.write(f"**Quantité :** {transaction['quantity']:.4f}")
-                        st.write(f"**Prix unitaire :** {transaction['price']:.2f} €")
-                        st.write(f"**Frais :** {transaction['fees']:.2f} €")
-                        st.write(f"**Total :** {total_amount:,.2f} €")
+                        
+                        # Afficher le prix dans la devise de saisie et en EUR
+                        if pd.notna(transaction.get('price_currency')):
+                            st.write(f"**Prix saisi :** {transaction['price']:.2f} {transaction['price_currency']}")
+                            if transaction['price_currency'] != 'EUR' and pd.notna(transaction.get('price_eur')):
+                                st.write(f"**Prix EUR :** {transaction['price_eur']:.2f} EUR")
+                        else:
+                            st.write(f"**Prix unitaire :** {transaction['price']:.2f} EUR")
+                        
+                        st.write(f"**Frais :** {transaction['fees']:.2f} EUR")
+                        st.write(f"**Total :** {total_amount:,.2f} EUR")
                         st.write(f"**Date :** {transaction['transaction_date'].strftime('%d/%m/%Y %H:%M')}")
         else:
             st.info("🔍 Aucune transaction ne correspond aux filtres sélectionnés.")
@@ -2172,6 +2711,29 @@ def config_page(tracker):
     
     st.divider()
     
+    st.subheader("💱 Gestion des devises")
+    st.write("L'application stocke automatiquement tous les prix en EUR et USD.")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔄 Actualiser le taux EUR/USD"):
+            with st.spinner("Mise à jour du taux de change EUR/USD..."):
+                # Forcer la mise à jour en réinitialisant la date
+                tracker.currency_converter.last_update = None
+                success = tracker.currency_converter.get_eur_usd_rate(show_debug=True)
+                if success:
+                    st.success("✅ Taux EUR/USD mis à jour!")
+                else:
+                    st.warning("⚠️ Taux de secours utilisé")
+            st.rerun()
+    
+    with col2:
+        with st.expander("📊 Taux de change EUR/USD actuel", expanded=False):
+            st.text(tracker.currency_converter.get_rate_info())
+    
+    st.divider()
+    
     st.subheader("📈 Initialisation de l'historique des prix")
     st.write("""
     **Important :** Pour utiliser les courbes d'évolution, vous devez d'abord initialiser l'historique des prix.
@@ -2198,26 +2760,27 @@ def config_page(tracker):
                 st.error("Aucun produit financier trouvé. Ajoutez d'abord des produits.")
     
     with col2:
-        # Statistiques sur l'historique actuel
+        # Statistiques sur l'historique actuel - maintenant dans un expander
         if not products.empty:
-            conn = sqlite3.connect(tracker.db_path)
-            cursor = conn.cursor()
-            
-            st.write("**📊 État de l'historique actuel :**")
-            
-            for _, product in products.iterrows():
-                cursor.execute('''SELECT COUNT(*), MIN(date), MAX(date) 
-                                FROM price_history WHERE product_id = ?''', (product['id'],))
-                result = cursor.fetchone()
-                count, min_date, max_date = result
+            with st.expander("📊 État de l'historique actuel", expanded=False):
+                conn = sqlite3.connect(tracker.db_path)
+                cursor = conn.cursor()
                 
-                if count > 0:
-                    st.write(f"**{product['symbol']}** : {count} points de données")
-                    st.write(f"   📅 Du {min_date} au {max_date}")
-                else:
-                    st.write(f"**{product['symbol']}** : ❌ Aucun historique")
-            
-            conn.close()
+                st.write("**Détail par produit :**")
+                
+                for _, product in products.iterrows():
+                    cursor.execute('''SELECT COUNT(*), MIN(date), MAX(date) 
+                                    FROM price_history WHERE product_id = ?''', (product['id'],))
+                    result = cursor.fetchone()
+                    count, min_date, max_date = result
+                    
+                    if count > 0:
+                        st.write(f"**{product['symbol']}** : {count} points de données")
+                        st.write(f"   📅 Du {min_date} au {max_date}")
+                    else:
+                        st.write(f"**{product['symbol']}** : ❌ Aucun historique")
+                
+                conn.close()
     
     st.divider()
     
