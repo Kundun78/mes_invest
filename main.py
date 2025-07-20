@@ -20,11 +20,8 @@ def main():
     # Initialiser les taux de change EUR/USD au démarrage avec feedback
     if 'rates_initialized' not in st.session_state:
         with st.spinner("🔄 Récupération du taux de change EUR/USD..."):
-            success = tracker.currency_converter.get_eur_usd_rate(show_debug=True)
-            if success:
-                st.success(f"✅ Taux EUR/USD récupéré: 1 EUR = {tracker.currency_converter.eur_usd_rate:.4f} USD")
-            else:
-                st.warning("⚠️ Utilisation d'un taux de secours EUR/USD")
+            tracker.currency_converter.get_eur_usd_rate(show_debug=True)
+
         st.session_state.rates_initialized = True
     
     # Sidebar pour la navigation
