@@ -17,11 +17,10 @@ st.set_page_config(
 def main():
     tracker = PortfolioTracker()
     
-    # Initialiser les taux de change EUR/USD au démarrage avec feedback
+    # Initialiser les taux de change EUR/USD au démarrage de façon silencieuse
     if 'rates_initialized' not in st.session_state:
-        with st.spinner("🔄 Récupération du taux de change EUR/USD..."):
-            tracker.currency_converter.get_eur_usd_rate(show_debug=True)
-
+        # Initialisation silencieuse sans affichage
+        tracker.currency_converter._get_eur_usd_rate_silent()
         st.session_state.rates_initialized = True
     
     # Sidebar pour la navigation

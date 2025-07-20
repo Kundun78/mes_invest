@@ -177,15 +177,88 @@ def accounts_page(tracker):
                 st.info("**🤖 Détection automatique :**\n\n✅ Devise\n✅ Nom officiel\n✅ Type de produit\n✅ Prix actuel")
             
             # Message d'information
-            st.success("💡 Le produit sera automatiquement analysé et toutes ses informations seront récupérées depuis Yahoo Finance !")
+            st.success("💡 Testez d'abord votre produit avec la prévisualisation avant de l'ajouter !")
             
-            submitted = st.form_submit_button("✅ Ajouter le produit", type="primary")
+            # Boutons de prévisualisation et d'ajout
+            col1, col2 = st.columns(2)
             
-            if submitted:
+            with col1:
+                preview_clicked = st.form_submit_button("🔍 Prévisualiser le produit", type="secondary")
+            
+            with col2:
+                add_clicked = st.form_submit_button("✅ Ajouter le produit", type="primary")
+            
+            # Gestion de la prévisualisation
+            if preview_clicked:
+                if not symbol.strip():
+                    st.error("❌ Le symbole est obligatoire pour la prévisualisation !")
+                else:
+                    with st.spinner(f"🔍 Analyse de '{symbol}' sur Yahoo Finance..."):
+                        success, info = tracker.yahoo_utils.get_product_info(symbol.strip().upper())
+                    
+                    if success:
+                        st.success("✅ Produit trouvé et analysé avec succès !")
+                        
+                        # Affichage de la prévisualisation dans des colonnes
+                        st.subheader("📋 Prévisualisation du produit")
+                        
+                        col_preview1, col_preview2, col_preview3 = st.columns(3)
+                        
+                        with col_preview1:
+                            st.write("**📊 Informations de base :**")
+                            st.write(f"**Symbole :** {info['symbol']}")
+                            st.write(f"**Nom détecté :** {info['name']}")
+                            st.write(f"**Type :** {info['product_type']}")
+                            st.write(f"**Devise native :** {info['currency']}")
+                        
+                        with col_preview2:
+                            st.write("**💰 Prix actuel :**")
+                            st.write(f"**Prix natif :** {info['current_price']:.2f} {info['currency']}")
+                            
+                            # Calculer et afficher les conversions
+                            price_eur, price_usd = tracker.currency_converter.convert_price_to_both(
+                                info['current_price'], info['currency']
+                            )
+                            st.write(f"**Prix EUR :** {price_eur:.2f} €")
+                            st.write(f"**Prix USD :** {price_usd:.2f} $")
+                        
+                        with col_preview3:
+                            st.write("**🏢 Métadonnées :**")
+                            if info.get('exchange'):
+                                st.write(f"**Bourse :** {info['exchange']}")
+                            if info.get('sector'):
+                                st.write(f"**Secteur :** {info['sector']}")
+                            if info.get('country'):
+                                st.write(f"**Pays :** {info['country']}")
+                            if info.get('market_cap'):
+                                market_cap_b = info['market_cap'] / 1e9
+                                st.write(f"**Cap. boursière :** {market_cap_b:.1f}B {info['currency']}")
+                        
+                        # Vérifier si le produit existe déjà
+                        existing_products = tracker.get_financial_products()
+                        if not existing_products.empty and info['symbol'] in existing_products['symbol'].values:
+                            st.warning(f"⚠️ Le produit '{info['symbol']}' existe déjà dans votre portefeuille !")
+                        else:
+                            st.info("✅ Ce produit peut être ajouté à votre portefeuille.")
+                        
+                        # Utiliser le nom personnalisé si fourni
+                        final_name = name.strip() if name.strip() else info['name']
+                        st.info(f"📝 Nom qui sera utilisé : **{final_name}**")
+                        
+                    else:
+                        st.error(f"❌ {info.get('error', 'Erreur inconnue')}")
+                        st.markdown("**💡 Conseils :**")
+                        st.markdown("- Vérifiez l'orthographe du symbole")
+                        st.markdown("- Allez sur [Yahoo Finance](https://fr.finance.yahoo.com/) pour confirmer le symbole")
+                        st.markdown("- Pour les actions françaises, ajoutez `.PA` (ex: `MC.PA` pour LVMH)")
+                        st.markdown("- Pour les cryptos en euros, ajoutez `-EUR` (ex: `BTC-EUR`)")
+            
+            # Gestion de l'ajout réel
+            if add_clicked:
                 if not symbol.strip():
                     st.error("❌ Le symbole est obligatoire !")
                 else:
-                    with st.spinner(f"🔍 Analyse automatique du produit '{symbol}' sur Yahoo Finance..."):
+                    with st.spinner(f"🔍 Ajout du produit '{symbol}' à votre portefeuille..."):
                         success, message = tracker.add_financial_product(symbol.strip().upper(), name.strip())
                     
                     if success:
@@ -194,11 +267,100 @@ def accounts_page(tracker):
                         st.rerun()
                     else:
                         st.error(f"❌ {message}")
-                        st.markdown("**💡 Conseils :**")
-                        st.markdown("- Vérifiez l'orthographe du symbole")
-                        st.markdown("- Allez sur [Yahoo Finance](https://fr.finance.yahoo.com/) pour confirmer le symbole")
-                        st.markdown("- Pour les actions françaises, ajoutez `.PA` (ex: `MC.PA` pour LVMH)")
-                        st.markdown("- Pour les cryptos en euros, ajoutez `-EUR` (ex: `BTC-EUR`)")
+                        st.markdown("**💡 Utilisez la prévisualisation pour vérifier le produit avant de l'ajouter.**")
+        
+        st.divider()
+        
+        # Section de test rapide pour explorer plusieurs produits
+        st.subheader("🚀 Explorateur de Produits Financiers")
+        st.write("Testez rapidement plusieurs symboles pour explorer les produits disponibles :")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Interface de test rapide sans formulaire
+            test_symbol = st.text_input(
+                "Symbole à explorer", 
+                placeholder="Ex: TSLA, ETH-EUR, SAN.PA",
+                key="test_symbol",
+                help="Entrez un symbole et cliquez sur Explorer"
+            )
+            
+            col_test1, col_test2 = st.columns([1, 1])
+            
+            with col_test1:
+                explore_clicked = st.button("🔍 Explorer ce symbole", key="explore_button")
+                
+                # Gestion des exemples avec session state
+                if 'example_clicked' in st.session_state and st.session_state.example_clicked:
+                    test_symbol = st.session_state.example_clicked
+                    st.session_state.example_clicked = None  # Reset
+                    explore_clicked = True
+                
+                if explore_clicked and test_symbol:
+                    with st.spinner(f"🔍 Exploration de {test_symbol}..."):
+                        success, info = tracker.yahoo_utils.get_product_info(test_symbol.upper())
+                    
+                    if success:
+                        # Affichage compact des résultats
+                        st.success(f"✅ **{info['symbol']}** trouvé !")
+                        
+                        result_col1, result_col2 = st.columns(2)
+                        
+                        with result_col1:
+                            st.write(f"📊 **{info['name']}**")
+                            st.write(f"🏷️ Type: {info['product_type']}")
+                            st.write(f"💱 Devise: {info['currency']}")
+                        
+                        with result_col2:
+                            st.write(f"💰 Prix: {info['current_price']:.2f} {info['currency']}")
+                            if info.get('exchange'):
+                                st.write(f"🏢 Bourse: {info['exchange']}")
+                            if info.get('sector'):
+                                st.write(f"📈 Secteur: {info['sector']}")
+                        
+                        # Vérifier si déjà dans le portefeuille
+                        existing_products = tracker.get_financial_products()
+                        already_exists = not existing_products.empty and info['symbol'] in existing_products['symbol'].values
+                        
+                        if already_exists:
+                            st.info(f"ℹ️ {info['symbol']} est déjà dans votre portefeuille")
+                        else:
+                            # Bouton pour ajouter rapidement
+                            if st.button(f"➕ Ajouter {info['symbol']} au portefeuille", key=f"quick_add_{info['symbol']}"):
+                                success_add, message_add = tracker.add_financial_product(info['symbol'])
+                                if success_add:
+                                    st.success(f"✅ {message_add}")
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {message_add}")
+                        
+                    else:
+                        st.error(f"❌ '{test_symbol}' non trouvé")
+                        st.info("💡 Vérifiez l'orthographe ou essayez avec un suffixe (.PA, -EUR, etc.)")
+                elif explore_clicked and not test_symbol:
+                    st.warning("💡 Entrez d'abord un symbole à explorer")
+            
+            with col_test2:
+                # Exemples de symboles populaires
+                st.write("**🎯 Exemples populaires :**")
+                examples = [
+                    ("AAPL", "Apple"),
+                    ("MC.PA", "LVMH"),
+                    ("BTC-EUR", "Bitcoin"),
+                    ("MSFT", "Microsoft"),
+                    ("OR.PA", "L'Oréal"),
+                    ("ETH-EUR", "Ethereum")
+                ]
+                
+                for symbol, name in examples:
+                    if st.button(f"{symbol}", key=f"example_{symbol}", help=f"Tester {name}"):
+                        # Utiliser session state pour déclencher l'exploration
+                        st.session_state.example_clicked = symbol
+                        st.rerun()
+        
+        with col2:
+            st.info("**💡 Conseils d'exploration :**\n\n🔍 Testez avant d'ajouter\n📊 Comparez les prix\n🌍 Explorez différents marchés\n💱 Vérifiez les devises")
         
         st.divider()
         
