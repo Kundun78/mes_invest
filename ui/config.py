@@ -35,6 +35,111 @@ def config_page(tracker):
     
     st.divider()
     
+    st.subheader("🔍 Diagnostic des Graphiques d'Évolution")
+    st.write("Vérifiez pourquoi les graphiques d'évolution ne s'affichent pas :")
+    
+    if st.button("🧪 Diagnostic Complet"):
+        with st.spinner("Diagnostic en cours..."):
+            # 1. Vérifier les données de base
+            st.write("**📊 1. Vérification des données de base :**")
+            
+            transactions = tracker.get_all_transactions()
+            if transactions.empty:
+                st.error("❌ Aucune transaction trouvée ! Ajoutez des transactions d'abord.")
+                return
+            else:
+                st.success(f"✅ {len(transactions)} transactions trouvées")
+                oldest_transaction = transactions['transaction_date'].min()
+                newest_transaction = transactions['transaction_date'].max()
+                st.info(f"📅 Période : du {oldest_transaction.strftime('%d/%m/%Y')} au {newest_transaction.strftime('%d/%m/%Y')}")
+            
+            # 2. Vérifier l'historique des prix
+            st.write("**📈 2. Vérification de l'historique des prix :**")
+            
+            stats = tracker.db.get_database_stats()
+            history_count = stats.get('price_history', 0)
+            
+            if history_count == 0:
+                st.error("❌ Aucun historique de prix ! Initialisez l'historique dans la section ci-dessus.")
+                return
+            else:
+                st.success(f"✅ {history_count} points d'historique de prix trouvés")
+            
+            # 3. Tester le calcul d'évolution
+            st.write("**⚙️ 3. Test du calcul d'évolution :**")
+            
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=30)  # Test sur 30 jours
+            
+            try:
+                evolution_data = tracker.get_portfolio_evolution(start_date, end_date)
+                
+                if evolution_data.empty:
+                    st.warning("⚠️ Aucune donnée d'évolution générée. Vérifiez que vos transactions sont dans la période testée.")
+                    
+                    # Diagnostic plus poussé
+                    st.write("**🔍 Diagnostic détaillé :**")
+                    
+                    # Vérifier les transactions dans la période
+                    transactions_in_period = transactions[
+                        (transactions['transaction_date'] >= start_date) & 
+                        (transactions['transaction_date'] <= end_date)
+                    ]
+                    
+                    if transactions_in_period.empty:
+                        st.info(f"💡 Aucune transaction dans les 30 derniers jours. Essayez une période plus large.")
+                        
+                        # Test avec une période plus large
+                        start_date_large = oldest_transaction
+                        evolution_data_large = tracker.get_portfolio_evolution(start_date_large, end_date)
+                        
+                        if not evolution_data_large.empty:
+                            st.success(f"✅ {len(evolution_data_large)} points d'évolution générés avec la période complète")
+                            st.info("💡 Les graphiques devraient maintenant fonctionner dans l'interface principale !")
+                        else:
+                            st.error("❌ Problème dans le calcul d'évolution même avec la période complète")
+                    else:
+                        st.info(f"📊 {len(transactions_in_period)} transactions trouvées dans la période")
+                        
+                else:
+                    st.success(f"✅ {len(evolution_data)} points d'évolution générés avec succès !")
+                    
+                    # Afficher un aperçu
+                    if len(evolution_data) > 0:
+                        first_value = evolution_data['total_value'].iloc[0]
+                        last_value = evolution_data['total_value'].iloc[-1]
+                        st.info(f"📈 Valeur de départ : {first_value:,.2f} €")
+                        st.info(f"📈 Valeur actuelle : {last_value:,.2f} €")
+                        st.success("🎉 Les graphiques d'évolution devraient maintenant fonctionner !")
+                        
+            except Exception as e:
+                st.error(f"❌ Erreur lors du calcul d'évolution : {str(e)}")
+                st.write("**Stack trace pour debug :**")
+                import traceback
+                st.code(traceback.format_exc())
+            
+            # 4. Vérifier les conversions EUR/USD
+            st.write("**💱 4. Vérification des conversions EUR/USD :**")
+            
+            transactions_with_conversion = transactions[transactions['price_currency'] != 'EUR']
+            if not transactions_with_conversion.empty:
+                st.info(f"📊 {len(transactions_with_conversion)} transactions avec conversion de devise trouvées")
+                
+                # Vérifier si les prix EUR sont bien renseignés
+                missing_eur_conversion = transactions_with_conversion[
+                    transactions_with_conversion['price_eur'].isna()
+                ]
+                
+                if not missing_eur_conversion.empty:
+                    st.warning(f"⚠️ {len(missing_eur_conversion)} transactions sans conversion EUR détectées")
+                    st.info("💡 Cela peut affecter les calculs d'évolution")
+                else:
+                    st.success("✅ Toutes les conversions EUR sont correctes")
+            else:
+                st.info("📊 Toutes les transactions sont en EUR, pas de conversion nécessaire")
+    
+    st.divider()
+    
     st.subheader("💱 Gestion des devises")
     st.write("L'application détecte automatiquement les devises et stocke tous les prix en EUR et USD.")
     

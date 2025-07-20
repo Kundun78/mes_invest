@@ -98,7 +98,7 @@ def dashboard_page(tracker):
                              f"{variation:,.2f} €",
                              delta=f"{variation_pct:.2f}%")
             else:
-                st.info("📊 Pas assez de données pour afficher l'évolution sur 1 an.")
+                st.info("📊 Pas assez de données pour afficher l'évolution sur 1 an. Vérifiez que vous avez des transactions et de l'historique de prix.")
         else:
             st.info("🔧 Pour voir les courbes d'évolution, initialisez l'historique des prix dans la Configuration.")
         

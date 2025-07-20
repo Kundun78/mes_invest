@@ -462,11 +462,7 @@ class PortfolioTracker:
     def get_portfolio_evolution(self, start_date: datetime, end_date: datetime, 
                                account_filter: list = None, product_filter: list = None, 
                                asset_class_filter: list = None) -> pd.DataFrame:
-        """Calcule l'évolution de la valeur du portefeuille dans le temps"""
-        # Cette méthode est complexe et utilise la même logique que dans l'original
-        # mais avec les nouveaux prix EUR/USD stockés
-        # Implementation détaillée similaire à l'original mais adaptée à la nouvelle structure
-        
+        """Calcule l'évolution de la valeur du portefeuille dans le temps avec les nouveaux prix EUR/USD"""
         import sqlite3
         conn = sqlite3.connect(self.db.db_path)
         
@@ -518,10 +514,163 @@ class PortfolioTracker:
         if transactions.empty:
             return pd.DataFrame()
         
-        # Logique similaire à l'original mais simplifiée car on a déjà les prix EUR
-        # ... (implementation complète)
+        # Générer les dates pour l'évolution
+        total_days = (end_date - start_date).days
         
-        return pd.DataFrame()  # Placeholder - implementer la logique complète
+        if total_days <= 7:
+            freq = '1D'   # Quotidien pour 7 jours ou moins
+        elif total_days <= 30:
+            freq = '2D'   # Tous les 2 jours pour 1 mois
+        elif total_days <= 90:
+            freq = 'W'    # Hebdomadaire pour 3 mois
+        else:
+            freq = 'W'    # Hebdomadaire pour plus de 3 mois
+            
+        date_range = pd.date_range(start=start_date, end=end_date, freq=freq)
+        evolution_data = []
+        
+        for current_date in date_range:
+            daily_breakdown = {
+                'account': {},
+                'platform': {},
+                'asset_class': {},
+                'product': {},
+                'currency': {}
+            }
+            daily_value = 0
+            total_invested_to_date = 0
+            
+            # Transactions jusqu'à cette date
+            trans_to_date = transactions[
+                pd.to_datetime(transactions['transaction_date']) <= current_date
+            ]
+            
+            if trans_to_date.empty:
+                evolution_data.append({
+                    'date': current_date,
+                    'total_value': 0,
+                    'total_invested': 0,
+                    'gain_loss': 0,
+                    'breakdown_account': {},
+                    'breakdown_platform': {},
+                    'breakdown_asset_class': {},
+                    'breakdown_product': {},
+                    'breakdown_currency': {}
+                })
+                continue
+            
+            # Calculer les positions à cette date
+            positions = {}
+            
+            for _, trans in trans_to_date.iterrows():
+                symbol = trans['symbol']
+                if symbol not in positions:
+                    positions[symbol] = {
+                        'quantity': 0,
+                        'symbol': symbol,
+                        'name': trans['name'],
+                        'product_type': trans['product_type'],
+                        'currency': trans['currency'],
+                        'account_name': trans['account_name'],
+                        'platform_name': trans['platform_name'],
+                        'invested_amount': 0
+                    }
+                
+                if trans['transaction_type'] == 'BUY':
+                    positions[symbol]['quantity'] += trans['quantity']
+                    # Utiliser le prix EUR déjà converti historiquement
+                    invested_eur = trans['quantity'] * trans['price_eur'] + (trans['fees'] if pd.notna(trans['fees']) else 0)
+                    positions[symbol]['invested_amount'] += invested_eur
+                else:  # SELL
+                    # Calculer le ratio vendu
+                    if positions[symbol]['quantity'] > 0:
+                        ratio_sold = trans['quantity'] / positions[symbol]['quantity']
+                        # Réduire proportionnellement le montant investi
+                        positions[symbol]['invested_amount'] *= (1 - ratio_sold)
+                    
+                    positions[symbol]['quantity'] -= trans['quantity']
+                    
+                    # Si la quantité devient négative, remettre à 0
+                    if positions[symbol]['quantity'] < 0:
+                        positions[symbol]['quantity'] = 0
+                        positions[symbol]['invested_amount'] = 0
+            
+            # Calculer le montant total investi à cette date
+            total_invested_to_date = sum(pos['invested_amount'] for pos in positions.values() if pos['quantity'] > 0)
+            
+            # Récupérer les prix pour cette date
+            for symbol, position in positions.items():
+                if position['quantity'] > 0:
+                    # Chercher le prix EUR le plus proche de cette date dans l'historique
+                    price_history = self.get_price_history(symbol, current_date - timedelta(days=7), current_date)
+                    closest_price_eur = None
+                    
+                    if not price_history.empty:
+                        # Utiliser le prix EUR de l'historique
+                        if 'price_eur' in price_history.columns and pd.notna(price_history.iloc[-1]['price_eur']):
+                            closest_price_eur = price_history.iloc[-1]['price_eur']
+                        else:
+                            # Fallback au prix original avec conversion
+                            closest_price = price_history.iloc[-1]['price']
+                            if pd.notna(closest_price):
+                                closest_price_eur = self.currency_converter.convert_to_eur(closest_price, position['currency'])
+                    else:
+                        # Si pas d'historique, utiliser le prix EUR actuel du produit
+                        products = self.get_financial_products()
+                        product_row = products[products['symbol'] == symbol]
+                        if not product_row.empty:
+                            product = product_row.iloc[0]
+                            if pd.notna(product.get('current_price_eur')):
+                                closest_price_eur = product['current_price_eur']
+                            elif pd.notna(product.get('current_price')):
+                                closest_price_eur = self.currency_converter.convert_to_eur(
+                                    product['current_price'], product['currency']
+                                )
+                    
+                    if closest_price_eur and closest_price_eur > 0:
+                        value = position['quantity'] * closest_price_eur
+                        daily_value += value
+                        
+                        # Breakdown par catégorie
+                        account_name = position['account_name']
+                        platform_name = position['platform_name']
+                        asset_class = position['product_type']
+                        product_name = position['name']
+                        currency = position['currency']
+                        
+                        if account_name not in daily_breakdown['account']:
+                            daily_breakdown['account'][account_name] = 0
+                        daily_breakdown['account'][account_name] += value
+                        
+                        if platform_name not in daily_breakdown['platform']:
+                            daily_breakdown['platform'][platform_name] = 0
+                        daily_breakdown['platform'][platform_name] += value
+                        
+                        if asset_class not in daily_breakdown['asset_class']:
+                            daily_breakdown['asset_class'][asset_class] = 0
+                        daily_breakdown['asset_class'][asset_class] += value
+                        
+                        if product_name not in daily_breakdown['product']:
+                            daily_breakdown['product'][product_name] = 0
+                        daily_breakdown['product'][product_name] += value
+                        
+                        if currency not in daily_breakdown['currency']:
+                            daily_breakdown['currency'][currency] = 0
+                        daily_breakdown['currency'][currency] += value
+            
+            evolution_data.append({
+                'date': current_date,
+                'total_value': daily_value,
+                'total_invested': total_invested_to_date,
+                'gain_loss': daily_value - total_invested_to_date,
+                'breakdown_account': daily_breakdown['account'],
+                'breakdown_platform': daily_breakdown['platform'],
+                'breakdown_asset_class': daily_breakdown['asset_class'],
+                'breakdown_product': daily_breakdown['product'],
+                'breakdown_currency': daily_breakdown['currency']
+            })
+        
+        return pd.DataFrame(evolution_data)
     
     def get_available_filters(self):
         """Récupère les options disponibles pour les filtres"""
