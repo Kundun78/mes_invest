@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 
-def dashboard_page(tracker):
+def dashboard_page(tracker, user_id):
     st.title("🏠 Tableau de Bord")
     
     col1, col2 = st.columns([3, 1])
@@ -19,8 +19,8 @@ def dashboard_page(tracker):
             st.success("Prix mis à jour!")
             st.rerun()
     
-    # Résumé du portefeuille
-    portfolio = tracker.get_portfolio_summary()
+    # Résumé du portefeuille - filtré par user_id
+    portfolio = tracker.get_portfolio_summary(user_id)
     
     if not portfolio.empty:
         # Métriques principales
@@ -42,8 +42,8 @@ def dashboard_page(tracker):
         with col4:
             st.metric("📊 Nombre de positions", len(portfolio))
         
-        # Vérifier s'il y a des données d'historique
-        stats = tracker.db.get_database_stats()
+        # Vérifier s'il y a des données d'historique pour cet utilisateur
+        stats = tracker.db.get_database_stats(user_id)
         history_count = stats.get('price_history', 0)
         
         if history_count > 0:
@@ -53,7 +53,7 @@ def dashboard_page(tracker):
             end_date = datetime.now()
             start_date = end_date - timedelta(days=365)
             
-            evolution_data = tracker.get_portfolio_evolution(start_date, end_date)
+            evolution_data = tracker.get_portfolio_evolution(start_date, end_date, user_id)
             
             if not evolution_data.empty and len(evolution_data) > 1:
                 # Calculer la variation
@@ -124,9 +124,9 @@ def dashboard_page(tracker):
             )
             st.plotly_chart(fig_platform, use_container_width=True)
         
-        # Affichage des transactions récentes
+        # Affichage des transactions récentes - filtrées par user_id
         st.subheader("📋 Transactions récentes")
-        all_transactions = tracker.get_all_transactions()
+        all_transactions = tracker.get_all_transactions(user_id)
         recent_transactions = all_transactions.head(5) if not all_transactions.empty else pd.DataFrame()
         
         if not recent_transactions.empty:

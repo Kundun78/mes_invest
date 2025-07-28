@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-def accounts_page(tracker):
+def accounts_page(tracker, user_id):
     st.title("💼 Gestion des Comptes")
     
     tab1, tab2, tab3 = st.tabs(["Plateformes", "Comptes", "Produits Financiers"])
@@ -12,14 +12,14 @@ def accounts_page(tracker):
             platform_name = st.text_input("Nom de la plateforme")
             platform_desc = st.text_area("Description")
             if st.form_submit_button("Ajouter"):
-                if tracker.add_platform(platform_name, platform_desc):
+                if tracker.add_platform(platform_name, platform_desc, user_id):
                     st.success("Plateforme ajoutée!")
                     st.rerun()
                 else:
                     st.error("Cette plateforme existe déjà!")
         
         st.subheader("Plateformes existantes")
-        platforms = tracker.get_platforms()
+        platforms = tracker.get_platforms(user_id)
         
         if not platforms.empty:
             for idx, platform in platforms.iterrows():
@@ -35,7 +35,7 @@ def accounts_page(tracker):
                             col_update, col_delete = st.columns(2)
                             with col_update:
                                 if st.form_submit_button("✏️ Modifier", type="primary"):
-                                    if tracker.update_platform(platform['id'], new_name, new_desc):
+                                    if tracker.update_platform(platform['id'], new_name, new_desc, user_id):
                                         st.success("Plateforme modifiée!")
                                         st.rerun()
                                     else:
@@ -43,7 +43,7 @@ def accounts_page(tracker):
                             
                             with col_delete:
                                 if st.form_submit_button("🗑️ Supprimer", type="secondary"):
-                                    success, message = tracker.delete_platform(platform['id'])
+                                    success, message = tracker.delete_platform(platform['id'], user_id)
                                     if success:
                                         st.success(message)
                                         st.rerun()
@@ -60,7 +60,7 @@ def accounts_page(tracker):
     
     with tab2:
         st.subheader("Ajouter un compte")
-        platforms = tracker.get_platforms()
+        platforms = tracker.get_platforms(user_id)
         if not platforms.empty:
             with st.form("add_account"):
                 platform_choice = st.selectbox("Plateforme", 
@@ -70,14 +70,14 @@ def accounts_page(tracker):
                 account_type = st.selectbox("Type de compte", 
                                           ["CTO", "PEA", "Assurance Vie", "Livret", "Portefeuille Crypto", "Autre"])
                 if st.form_submit_button("Ajouter"):
-                    tracker.add_account(platform_choice, account_name, account_type)
+                    tracker.add_account(platform_choice, account_name, account_type, user_id)
                     st.success("Compte ajouté!")
                     st.rerun()
         else:
             st.warning("Ajoutez d'abord une plateforme pour créer des comptes.")
         
         st.subheader("Comptes existants")
-        accounts = tracker.get_accounts()
+        accounts = tracker.get_accounts(user_id)
         
         if not accounts.empty:
             for idx, account in accounts.iterrows():
@@ -112,7 +112,7 @@ def accounts_page(tracker):
                             col_update, col_delete = st.columns(2)
                             with col_update:
                                 if st.form_submit_button("✏️ Modifier", type="primary"):
-                                    if tracker.update_account(account['id'], new_platform, new_account_name, new_account_type):
+                                    if tracker.update_account(account['id'], new_platform, new_account_name, new_account_type, user_id):
                                         st.success("Compte modifié!")
                                         st.rerun()
                                     else:
@@ -120,7 +120,7 @@ def accounts_page(tracker):
                             
                             with col_delete:
                                 if st.form_submit_button("🗑️ Supprimer", type="secondary"):
-                                    success, message = tracker.delete_account(account['id'])
+                                    success, message = tracker.delete_account(account['id'], user_id)
                                     if success:
                                         st.success(message)
                                         st.rerun()
@@ -234,8 +234,8 @@ def accounts_page(tracker):
                                 market_cap_b = info['market_cap'] / 1e9
                                 st.write(f"**Cap. boursière :** {market_cap_b:.1f}B {info['currency']}")
                         
-                        # Vérifier si le produit existe déjà
-                        existing_products = tracker.get_financial_products()
+                        # Vérifier si le produit existe déjà pour cet utilisateur
+                        existing_products = tracker.get_financial_products(user_id)
                         if not existing_products.empty and info['symbol'] in existing_products['symbol'].values:
                             st.warning(f"⚠️ Le produit '{info['symbol']}' existe déjà dans votre portefeuille !")
                         else:
@@ -259,7 +259,7 @@ def accounts_page(tracker):
                     st.error("❌ Le symbole est obligatoire !")
                 else:
                     with st.spinner(f"🔍 Ajout du produit '{symbol}' à votre portefeuille..."):
-                        success, message = tracker.add_financial_product(symbol.strip().upper(), name.strip())
+                        success, message = tracker.add_financial_product(symbol.strip().upper(), name.strip(), user_id)
                     
                     if success:
                         st.success(f"✅ {message}")
@@ -319,8 +319,8 @@ def accounts_page(tracker):
                             if info.get('sector'):
                                 st.write(f"📈 Secteur: {info['sector']}")
                         
-                        # Vérifier si déjà dans le portefeuille
-                        existing_products = tracker.get_financial_products()
+                        # Vérifier si déjà dans le portefeuille de cet utilisateur
+                        existing_products = tracker.get_financial_products(user_id)
                         already_exists = not existing_products.empty and info['symbol'] in existing_products['symbol'].values
                         
                         if already_exists:
@@ -328,7 +328,7 @@ def accounts_page(tracker):
                         else:
                             # Bouton pour ajouter rapidement
                             if st.button(f"➕ Ajouter {info['symbol']} au portefeuille", key=f"quick_add_{info['symbol']}"):
-                                success_add, message_add = tracker.add_financial_product(info['symbol'])
+                                success_add, message_add = tracker.add_financial_product(info['symbol'], "", user_id)
                                 if success_add:
                                     st.success(f"✅ {message_add}")
                                     st.rerun()
@@ -365,7 +365,7 @@ def accounts_page(tracker):
         st.divider()
         
         st.subheader("Produits financiers")
-        products = tracker.get_financial_products()
+        products = tracker.get_financial_products(user_id)
         
         if not products.empty:
             # Statistiques rapides avec nouvelles informations
@@ -462,14 +462,14 @@ def accounts_page(tracker):
                                                 st.error(f"❌ {message}")
                                             else:
                                                 # Symbole valide, procéder à la modification
-                                                if tracker.update_financial_product(product['id'], new_symbol.strip().upper(), new_name.strip(), new_type, new_currency):
+                                                if tracker.update_financial_product(product['id'], new_symbol.strip().upper(), new_name.strip(), new_type, new_currency, user_id):
                                                     st.success("✅ Produit modifié avec succès !")
                                                     st.rerun()
                                                 else:
                                                     st.error("❌ Erreur lors de la modification (symbole déjà existant ?)")
                                     else:
                                         # Symbole inchangé, modification directe
-                                        if tracker.update_financial_product(product['id'], new_symbol.strip().upper(), new_name.strip(), new_type, new_currency):
+                                        if tracker.update_financial_product(product['id'], new_symbol.strip().upper(), new_name.strip(), new_type, new_currency, user_id):
                                             st.success("✅ Produit modifié avec succès !")
                                             st.rerun()
                                         else:
@@ -477,7 +477,7 @@ def accounts_page(tracker):
                             
                             with col_delete:
                                 if st.form_submit_button("🗑️ Supprimer", type="secondary"):
-                                    success, message = tracker.delete_financial_product(product['id'])
+                                    success, message = tracker.delete_financial_product(product['id'], user_id)
                                     if success:
                                         st.success(f"✅ {message}")
                                         st.rerun()

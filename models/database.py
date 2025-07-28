@@ -4,38 +4,46 @@ from datetime import datetime
 from typing import Optional, Tuple, List, Dict
 
 class DatabaseManager:
-    """Gestionnaire de la base de données SQLite"""
+    """Gestionnaire de la base de données SQLite multi-utilisateur"""
     
     def __init__(self, db_path: str = "portfolio.db"):
         self.db_path = db_path
         self.init_database()
     
     def init_database(self):
-        """Initialise la base de données SQLite"""
+        """Initialise la base de données SQLite multi-utilisateur"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Table des plateformes
+        # Tables utilisateurs (gérées par AuthManager)
+        # Nous ajoutons seulement les colonnes user_id aux tables existantes
+        
+        # Table des plateformes (par utilisateur)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS platforms (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                description TEXT
+                name TEXT NOT NULL,
+                description TEXT,
+                user_id INTEGER,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                UNIQUE(name, user_id)
             )
         ''')
         
-        # Table des comptes
+        # Table des comptes (par utilisateur)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 platform_id INTEGER,
                 name TEXT NOT NULL,
                 account_type TEXT,
-                FOREIGN KEY (platform_id) REFERENCES platforms (id)
+                user_id INTEGER,
+                FOREIGN KEY (platform_id) REFERENCES platforms (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
         
-        # Table des produits financiers avec détection automatique de devise
+        # Table des produits financiers (COMMUNE à tous les utilisateurs)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS financial_products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +64,7 @@ class DatabaseManager:
             )
         ''')
         
-        # Table des transactions avec devise de saisie et conversion historique
+        # Table des transactions (par utilisateur)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,12 +81,14 @@ class DatabaseManager:
                 fees_currency TEXT DEFAULT 'EUR',
                 exchange_rate_eur_usd REAL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id INTEGER,
                 FOREIGN KEY (account_id) REFERENCES accounts (id),
-                FOREIGN KEY (product_id) REFERENCES financial_products (id)
+                FOREIGN KEY (product_id) REFERENCES financial_products (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
         
-        # Table des prix historiques avec EUR et USD
+        # Table des prix historiques (COMMUNE mais peut être par utilisateur pour les historiques personnalisés)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS price_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,12 +98,14 @@ class DatabaseManager:
                 price_usd REAL NOT NULL,
                 date DATE NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id INTEGER DEFAULT NULL,
                 FOREIGN KEY (product_id) REFERENCES financial_products (id),
-                UNIQUE(product_id, date)
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                UNIQUE(product_id, date, user_id)
             )
         ''')
         
-        # Table pour stocker les taux de change historiques
+        # Table pour stocker les taux de change historiques (COMMUNE)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS exchange_rates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,16 +118,31 @@ class DatabaseManager:
             )
         ''')
         
-        # Mise à jour des tables existantes pour ajouter les nouvelles colonnes
+        # Mise à jour des tables existantes pour ajouter les colonnes user_id
         self._update_existing_tables(cursor)
         
         conn.commit()
         conn.close()
     
     def _update_existing_tables(self, cursor):
-        """Met à jour les tables existantes pour ajouter les nouvelles colonnes"""
+        """Met à jour les tables existantes pour ajouter les colonnes user_id"""
         
-        # Colonnes à ajouter à financial_products
+        # Tables nécessitant user_id
+        tables_needing_user_id = ['platforms', 'accounts', 'transactions']
+        
+        for table in tables_needing_user_id:
+            try:
+                cursor.execute(f'ALTER TABLE {table} ADD COLUMN user_id INTEGER')
+            except sqlite3.OperationalError:
+                pass  # Colonne existe déjà
+        
+        # Ajouter user_id optionnel à price_history pour l'historique personnalisé
+        try:
+            cursor.execute('ALTER TABLE price_history ADD COLUMN user_id INTEGER DEFAULT NULL')
+        except sqlite3.OperationalError:
+            pass
+        
+        # Autres colonnes existantes...
         new_columns_products = [
             ('current_price_eur', 'REAL'),
             ('current_price_usd', 'REAL'),
@@ -131,9 +158,8 @@ class DatabaseManager:
             try:
                 cursor.execute(f'ALTER TABLE financial_products ADD COLUMN {column_name} {column_type}')
             except sqlite3.OperationalError:
-                pass  # Colonne existe déjà
+                pass
         
-        # Colonnes à ajouter à transactions
         new_columns_transactions = [
             ('price_currency', 'TEXT DEFAULT "EUR"'),
             ('price_eur', 'REAL'),
@@ -147,9 +173,8 @@ class DatabaseManager:
             try:
                 cursor.execute(f'ALTER TABLE transactions ADD COLUMN {column_name} {column_type}')
             except sqlite3.OperationalError:
-                pass  # Colonne existe déjà
+                pass
         
-        # Colonnes à ajouter à price_history
         new_columns_history = [
             ('price_eur', 'REAL'),
             ('price_usd', 'REAL'),
@@ -160,16 +185,16 @@ class DatabaseManager:
             try:
                 cursor.execute(f'ALTER TABLE price_history ADD COLUMN {column_name} {column_type}')
             except sqlite3.OperationalError:
-                pass  # Colonne existe déjà
+                pass
     
-    # Méthodes pour les plateformes
-    def add_platform(self, name: str, description: str = "") -> bool:
-        """Ajoute une nouvelle plateforme"""
+    # Méthodes pour les plateformes (avec user_id)
+    def add_platform(self, name: str, user_id: int, description: str = "") -> bool:
+        """Ajoute une nouvelle plateforme pour un utilisateur"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
-            cursor.execute("INSERT INTO platforms (name, description) VALUES (?, ?)", 
-                         (name, description))
+            cursor.execute("INSERT INTO platforms (name, description, user_id) VALUES (?, ?, ?)", 
+                         (name, description, user_id))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
@@ -177,13 +202,13 @@ class DatabaseManager:
         finally:
             conn.close()
     
-    def update_platform(self, platform_id: int, name: str, description: str = "") -> bool:
-        """Met à jour une plateforme"""
+    def update_platform(self, platform_id: int, name: str, user_id: int, description: str = "") -> bool:
+        """Met à jour une plateforme d'un utilisateur"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
-            cursor.execute("UPDATE platforms SET name = ?, description = ? WHERE id = ?",
-                         (name, description, platform_id))
+            cursor.execute("UPDATE platforms SET name = ?, description = ? WHERE id = ? AND user_id = ?",
+                         (name, description, platform_id, user_id))
             conn.commit()
             return cursor.rowcount > 0
         except sqlite3.IntegrityError:
@@ -191,13 +216,14 @@ class DatabaseManager:
         finally:
             conn.close()
     
-    def delete_platform(self, platform_id: int) -> Tuple[bool, str]:
-        """Supprime une plateforme (si aucun compte associé)"""
+    def delete_platform(self, platform_id: int, user_id: int) -> Tuple[bool, str]:
+        """Supprime une plateforme d'un utilisateur (si aucun compte associé)"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Vérifier si la plateforme a des comptes
-        cursor.execute("SELECT COUNT(*) FROM accounts WHERE platform_id = ?", (platform_id,))
+        # Vérifier si la plateforme appartient à l'utilisateur et a des comptes
+        cursor.execute("SELECT COUNT(*) FROM accounts WHERE platform_id = ? AND user_id = ?", 
+                      (platform_id, user_id))
         account_count = cursor.fetchone()[0]
         
         if account_count > 0:
@@ -205,7 +231,10 @@ class DatabaseManager:
             return False, f"Impossible de supprimer : {account_count} compte(s) utilisent cette plateforme"
         
         try:
-            cursor.execute("DELETE FROM platforms WHERE id = ?", (platform_id,))
+            cursor.execute("DELETE FROM platforms WHERE id = ? AND user_id = ?", (platform_id, user_id))
+            if cursor.rowcount == 0:
+                conn.close()
+                return False, "Plateforme non trouvée ou vous n'avez pas les droits"
             conn.commit()
             conn.close()
             return True, "Plateforme supprimée avec succès"
@@ -213,42 +242,58 @@ class DatabaseManager:
             conn.close()
             return False, f"Erreur lors de la suppression : {e}"
     
-    def get_platforms(self) -> pd.DataFrame:
-        """Récupère toutes les plateformes"""
+    def get_platforms(self, user_id: int) -> pd.DataFrame:
+        """Récupère toutes les plateformes d'un utilisateur"""
         conn = sqlite3.connect(self.db_path)
-        df = pd.read_sql_query("SELECT * FROM platforms ORDER BY name", conn)
+        df = pd.read_sql_query("SELECT * FROM platforms WHERE user_id = ? ORDER BY name", 
+                              conn, params=(user_id,))
         conn.close()
         return df
     
-    # Méthodes pour les comptes
-    def add_account(self, platform_id: int, name: str, account_type: str) -> bool:
-        """Ajoute un nouveau compte"""
+    # Méthodes pour les comptes (avec user_id)
+    def add_account(self, platform_id: int, name: str, account_type: str, user_id: int) -> bool:
+        """Ajoute un nouveau compte pour un utilisateur"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO accounts (platform_id, name, account_type) VALUES (?, ?, ?)",
-                      (platform_id, name, account_type))
+        
+        # Vérifier que la plateforme appartient à l'utilisateur
+        cursor.execute("SELECT id FROM platforms WHERE id = ? AND user_id = ?", (platform_id, user_id))
+        if not cursor.fetchone():
+            conn.close()
+            return False
+        
+        cursor.execute("INSERT INTO accounts (platform_id, name, account_type, user_id) VALUES (?, ?, ?, ?)",
+                      (platform_id, name, account_type, user_id))
         conn.commit()
         conn.close()
         return True
     
-    def update_account(self, account_id: int, platform_id: int, name: str, account_type: str) -> bool:
-        """Met à jour un compte"""
+    def update_account(self, account_id: int, platform_id: int, name: str, account_type: str, user_id: int) -> bool:
+        """Met à jour un compte d'un utilisateur"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("UPDATE accounts SET platform_id = ?, name = ?, account_type = ? WHERE id = ?",
-                      (platform_id, name, account_type, account_id))
+        
+        # Vérifier que la plateforme appartient à l'utilisateur
+        cursor.execute("SELECT id FROM platforms WHERE id = ? AND user_id = ?", (platform_id, user_id))
+        if not cursor.fetchone():
+            conn.close()
+            return False
+        
+        cursor.execute("UPDATE accounts SET platform_id = ?, name = ?, account_type = ? WHERE id = ? AND user_id = ?",
+                      (platform_id, name, account_type, account_id, user_id))
         conn.commit()
         success = cursor.rowcount > 0
         conn.close()
         return success
     
-    def delete_account(self, account_id: int) -> Tuple[bool, str]:
-        """Supprime un compte (si aucune transaction associée)"""
+    def delete_account(self, account_id: int, user_id: int) -> Tuple[bool, str]:
+        """Supprime un compte d'un utilisateur (si aucune transaction associée)"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         # Vérifier si le compte a des transactions
-        cursor.execute("SELECT COUNT(*) FROM transactions WHERE account_id = ?", (account_id,))
+        cursor.execute("SELECT COUNT(*) FROM transactions WHERE account_id = ? AND user_id = ?", 
+                      (account_id, user_id))
         transaction_count = cursor.fetchone()[0]
         
         if transaction_count > 0:
@@ -256,7 +301,10 @@ class DatabaseManager:
             return False, f"Impossible de supprimer : {transaction_count} transaction(s) utilisent ce compte"
         
         try:
-            cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+            cursor.execute("DELETE FROM accounts WHERE id = ? AND user_id = ?", (account_id, user_id))
+            if cursor.rowcount == 0:
+                conn.close()
+                return False, "Compte non trouvé ou vous n'avez pas les droits"
             conn.commit()
             conn.close()
             return True, "Compte supprimé avec succès"
@@ -264,22 +312,23 @@ class DatabaseManager:
             conn.close()
             return False, f"Erreur lors de la suppression : {e}"
     
-    def get_accounts(self) -> pd.DataFrame:
-        """Récupère tous les comptes avec les plateformes"""
+    def get_accounts(self, user_id: int) -> pd.DataFrame:
+        """Récupère tous les comptes d'un utilisateur avec les plateformes"""
         conn = sqlite3.connect(self.db_path)
         query = '''
             SELECT a.id, a.name, a.account_type, a.platform_id, p.name as platform_name
             FROM accounts a
             JOIN platforms p ON a.platform_id = p.id
+            WHERE a.user_id = ?
             ORDER BY p.name, a.name
         '''
-        df = pd.read_sql_query(query, conn)
+        df = pd.read_sql_query(query, conn, params=(user_id,))
         conn.close()
         return df
     
-    # Méthodes pour les produits financiers
+    # Méthodes pour les produits financiers (COMMUNS - pas de user_id)
     def add_financial_product(self, product_info: Dict) -> Tuple[bool, str]:
-        """Ajoute un nouveau produit financier avec informations complètes"""
+        """Ajoute un nouveau produit financier (commun à tous les utilisateurs)"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
@@ -302,55 +351,13 @@ class DatabaseManager:
             return True, f"Produit '{product_info['symbol']}' ajouté avec succès ! Prix actuel: {product_info['current_price']:.2f} {product_info['currency']}"
         except sqlite3.IntegrityError:
             conn.close()
-            return False, f"Le symbole '{product_info['symbol']}' existe déjà dans votre portefeuille."
+            return False, f"Le symbole '{product_info['symbol']}' existe déjà."
         except Exception as e:
             conn.close()
             return False, f"Erreur lors de l'ajout du produit: {str(e)}"
     
-    def update_financial_product(self, product_id: int, symbol: str, name: str, 
-                               product_type: str, currency: str) -> bool:
-        """Met à jour un produit financier"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        try:
-            cursor.execute('''UPDATE financial_products 
-                            SET symbol = ?, name = ?, product_type = ?, currency = ?
-                            WHERE id = ?''',
-                          (symbol, name, product_type, currency, product_id))
-            conn.commit()
-            return cursor.rowcount > 0
-        except sqlite3.IntegrityError:
-            return False
-        finally:
-            conn.close()
-    
-    def delete_financial_product(self, product_id: int) -> Tuple[bool, str]:
-        """Supprime un produit financier (si pas utilisé dans des transactions)"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Vérifier si le produit est utilisé dans des transactions
-        cursor.execute("SELECT COUNT(*) FROM transactions WHERE product_id = ?", (product_id,))
-        transaction_count = cursor.fetchone()[0]
-        
-        if transaction_count > 0:
-            conn.close()
-            return False, f"Impossible de supprimer : {transaction_count} transaction(s) utilisent ce produit"
-        
-        try:
-            # Supprimer l'historique des prix
-            cursor.execute("DELETE FROM price_history WHERE product_id = ?", (product_id,))
-            # Supprimer le produit
-            cursor.execute("DELETE FROM financial_products WHERE id = ?", (product_id,))
-            conn.commit()
-            conn.close()
-            return True, "Produit supprimé avec succès"
-        except Exception as e:
-            conn.close()
-            return False, f"Erreur lors de la suppression : {e}"
-    
     def get_financial_products(self) -> pd.DataFrame:
-        """Récupère tous les produits financiers"""
+        """Récupère tous les produits financiers (communs)"""
         conn = sqlite3.connect(self.db_path)
         df = pd.read_sql_query("SELECT * FROM financial_products ORDER BY symbol", conn)
         conn.close()
@@ -362,16 +369,19 @@ class DatabaseManager:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM financial_products WHERE symbol = ?", (symbol,))
         result = cursor.fetchone()
-        conn.close()
         
         if result:
-            columns = [desc[0] for desc in cursor.description]
+            # Récupérer les noms des colonnes
+            columns = [description[0] for description in cursor.description]
+            conn.close()
             return pd.Series(result, index=columns)
+        
+        conn.close()
         return None
     
     def update_product_price(self, symbol: str, current_price: float, 
                            price_eur: float, price_usd: float) -> bool:
-        """Met à jour le prix d'un produit"""
+        """Met à jour le prix d'un produit (commun)"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('''UPDATE financial_products 
@@ -383,28 +393,30 @@ class DatabaseManager:
         conn.close()
         return success
     
-    # Méthodes pour les transactions
+    # Méthodes pour les transactions (avec user_id)
     def add_transaction(self, account_id: int, product_id: int, transaction_type: str,
                        quantity: float, price: float, price_currency: str, 
                        price_eur: float, price_usd: float, transaction_date: datetime, 
                        fees: float = 0, fees_currency: str = "EUR", 
-                       exchange_rate: float = None) -> bool:
-        """Ajoute une nouvelle transaction avec conversion de devises"""
+                       exchange_rate: float = None, user_id: int = None) -> bool:
+        """Ajoute une nouvelle transaction pour un utilisateur"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute('''INSERT INTO transactions 
                         (account_id, product_id, transaction_type, quantity, price, price_currency,
-                         price_eur, price_usd, transaction_date, fees, fees_currency, exchange_rate_eur_usd)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                         price_eur, price_usd, transaction_date, fees, fees_currency, 
+                         exchange_rate_eur_usd, user_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                       (account_id, product_id, transaction_type, quantity, price, price_currency,
-                       price_eur, price_usd, transaction_date, fees, fees_currency, exchange_rate))
+                       price_eur, price_usd, transaction_date, fees, fees_currency, 
+                       exchange_rate, user_id))
         conn.commit()
         conn.close()
         return True
     
-    def get_all_transactions(self) -> pd.DataFrame:
-        """Récupère toutes les transactions avec détails"""
+    def get_all_transactions(self, user_id: int) -> pd.DataFrame:
+        """Récupère toutes les transactions d'un utilisateur avec détails"""
         conn = sqlite3.connect(self.db_path)
         query = '''
             SELECT 
@@ -429,9 +441,10 @@ class DatabaseManager:
             JOIN financial_products fp ON t.product_id = fp.id
             JOIN accounts a ON t.account_id = a.id
             JOIN platforms p ON a.platform_id = p.id
+            WHERE t.user_id = ?
             ORDER BY t.transaction_date DESC
         '''
-        df = pd.read_sql_query(query, conn)
+        df = pd.read_sql_query(query, conn, params=(user_id,))
         conn.close()
         
         if not df.empty:
@@ -441,7 +454,7 @@ class DatabaseManager:
         
         return df
     
-    # Méthodes pour les taux de change historiques
+    # Méthodes pour les taux de change historiques (communs)
     def save_exchange_rate(self, from_currency: str, to_currency: str, 
                           rate: float, date: datetime) -> bool:
         """Sauvegarde un taux de change historique"""
@@ -472,18 +485,34 @@ class DatabaseManager:
         return result[0] if result else None
     
     # Méthodes utilitaires
-    def get_database_stats(self) -> Dict:
+    def get_database_stats(self, user_id: int = None) -> Dict:
         """Retourne des statistiques sur la base de données"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         stats = {}
         
-        # Compter les enregistrements dans chaque table
-        tables = ['platforms', 'accounts', 'financial_products', 'transactions', 'price_history', 'exchange_rates']
-        for table in tables:
+        if user_id:
+            # Stats spécifiques à l'utilisateur
+            user_tables = [
+                ('platforms', 'SELECT COUNT(*) FROM platforms WHERE user_id = ?'),
+                ('accounts', 'SELECT COUNT(*) FROM accounts WHERE user_id = ?'),
+                ('transactions', 'SELECT COUNT(*) FROM transactions WHERE user_id = ?'),
+            ]
+            
+            for table, query in user_tables:
+                cursor.execute(query, (user_id,))
+                stats[table] = cursor.fetchone()[0]
+        
+        # Stats communes
+        common_tables = ['financial_products', 'price_history', 'exchange_rates']
+        for table in common_tables:
             cursor.execute(f"SELECT COUNT(*) FROM {table}")
             stats[table] = cursor.fetchone()[0]
+        
+        # Stats globales
+        cursor.execute("SELECT COUNT(*) FROM users")
+        stats['users'] = cursor.fetchone()[0]
         
         conn.close()
         return stats

@@ -2,15 +2,15 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-def transaction_page(tracker):
+def transaction_page(tracker, user_id):
     st.title("💸 Gestion des Transactions")
     st.caption("💡 Saisissez vos prix dans n'importe quelle devise - La conversion historique est automatique !")
     
     # Onglets pour séparer nouvelle transaction et gestion
     tab1, tab2 = st.tabs(["🛒 Nouvelle Transaction", "📋 Gérer les Transactions"])
     
-    accounts = tracker.get_accounts()
-    products = tracker.get_financial_products()
+    accounts = tracker.get_accounts(user_id)
+    products = tracker.get_financial_products(user_id)
     
     if accounts.empty or products.empty:
         st.warning("Vous devez d'abord créer des comptes et des produits financiers.")
@@ -99,7 +99,7 @@ def transaction_page(tracker):
                 try:
                     tracker.add_transaction(account_choice, product_choice, transaction_type,
                                           quantity, price, price_currency, 
-                                          datetime.combine(transaction_date, datetime.min.time()), fees)
+                                          datetime.combine(transaction_date, datetime.min.time()), fees, user_id)
                     st.success(f"✅ Transaction ajoutée! Prix: {price:.2f} {price_currency}")
                     st.balloons()
                     st.rerun()
@@ -109,8 +109,8 @@ def transaction_page(tracker):
     with tab2:
         st.subheader("Gérer les transactions existantes")
         
-        # Récupérer toutes les transactions
-        all_transactions = tracker.get_all_transactions()
+        # Récupérer toutes les transactions de cet utilisateur
+        all_transactions = tracker.get_all_transactions(user_id)
         
         if all_transactions.empty:
             st.info("📝 Aucune transaction enregistrée.")
@@ -315,7 +315,7 @@ def transaction_page(tracker):
                                     success, message = tracker.update_transaction(
                                         transaction['id'], new_account, new_product, new_type,
                                         new_quantity, new_price, new_price_currency,
-                                        datetime.combine(new_date, datetime.min.time()), new_fees
+                                        datetime.combine(new_date, datetime.min.time()), new_fees, user_id
                                     )
                                     if success:
                                         st.success(message)
@@ -325,7 +325,7 @@ def transaction_page(tracker):
                             
                             with col_delete:
                                 if st.form_submit_button("🗑️ Supprimer", type="secondary"):
-                                    success, message = tracker.delete_transaction(transaction['id'])
+                                    success, message = tracker.delete_transaction(transaction['id'], user_id)
                                     if success:
                                         st.success(message)
                                         st.rerun()
@@ -369,7 +369,7 @@ def transaction_page(tracker):
                         st.write(f"**Date/Heure :** {transaction['transaction_date'].strftime('%d/%m/%Y %H:%M')}")
                         
                         # Comparaison avec les prix actuels si disponible
-                        products = tracker.get_financial_products()
+                        products = tracker.get_financial_products(user_id)
                         current_product = products[products['symbol'] == transaction['symbol']]
                         if not current_product.empty:
                             current_price = current_product.iloc[0]

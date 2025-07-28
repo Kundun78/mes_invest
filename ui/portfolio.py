@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 
-def portfolio_page(tracker):
+def portfolio_page(tracker, user_id):
     st.title("📈 Suivi de Portefeuille Avancé")
     st.caption("💱 Analyse multi-devises avec conversion automatique en temps réel")
     
@@ -52,8 +52,8 @@ def portfolio_page(tracker):
         
         st.divider()
         
-        # Récupérer les options de filtrage
-        filters = tracker.get_available_filters()
+        # Récupérer les options de filtrage - filtré par user_id
+        filters = tracker.get_available_filters(user_id)
         
         # Filtres par compte
         st.write("**💼 Comptes**")
@@ -116,7 +116,7 @@ def portfolio_page(tracker):
             st.rerun()
     
     # Contenu principal
-    portfolio = tracker.get_portfolio_summary()
+    portfolio = tracker.get_portfolio_summary(user_id)
     
     if portfolio.empty:
         st.info("📝 Aucune position dans le portefeuille. Ajoutez des transactions pour commencer l'analyse!")
@@ -162,9 +162,9 @@ def portfolio_page(tracker):
     # Évolution temporelle
     st.subheader("📈 Évolution de la valeur du portefeuille")
     
-    # Récupérer l'évolution
+    # Récupérer l'évolution - filtré par user_id
     evolution_data = tracker.get_portfolio_evolution(
-        start_date, end_date, account_filter, product_filter, asset_filter
+        start_date, end_date, user_id, account_filter, product_filter, asset_filter
     )
     
     if not evolution_data.empty and len(evolution_data) > 1:
@@ -391,8 +391,8 @@ def portfolio_page(tracker):
             st.metric("📊 Volatilité", f"{volatility:,.2f} €")
             
     else:
-        # Vérifier s'il y a des données d'historique
-        stats = tracker.db.get_database_stats()
+        # Vérifier s'il y a des données d'historique pour cet utilisateur
+        stats = tracker.db.get_database_stats(user_id)
         history_count = stats.get('price_history', 0)
         
         if history_count == 0:

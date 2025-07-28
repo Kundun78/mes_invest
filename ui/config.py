@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-def config_page(tracker):
+def config_page(tracker, user_id):
     st.title("⚙️ Configuration")
     
     st.subheader("🔄 Gestion des prix")
@@ -21,7 +21,7 @@ def config_page(tracker):
     
     with col2:
         st.write("**Mise à jour d'un produit spécifique**")
-        products = tracker.get_financial_products()
+        products = tracker.get_financial_products(user_id)
         if not products.empty:
             product_to_update = st.selectbox("Produit à actualiser", 
                                            products['symbol'].tolist(),
@@ -43,7 +43,7 @@ def config_page(tracker):
             # 1. Vérifier les données de base
             st.write("**📊 1. Vérification des données de base :**")
             
-            transactions = tracker.get_all_transactions()
+            transactions = tracker.get_all_transactions(user_id)
             if transactions.empty:
                 st.error("❌ Aucune transaction trouvée ! Ajoutez des transactions d'abord.")
                 return
@@ -56,7 +56,7 @@ def config_page(tracker):
             # 2. Vérifier l'historique des prix
             st.write("**📈 2. Vérification de l'historique des prix :**")
             
-            stats = tracker.db.get_database_stats()
+            stats = tracker.db.get_database_stats(user_id)
             history_count = stats.get('price_history', 0)
             
             if history_count == 0:
@@ -72,7 +72,7 @@ def config_page(tracker):
             start_date = end_date - timedelta(days=30)  # Test sur 30 jours
             
             try:
-                evolution_data = tracker.get_portfolio_evolution(start_date, end_date)
+                evolution_data = tracker.get_portfolio_evolution(start_date, end_date, user_id)
                 
                 if evolution_data.empty:
                     st.warning("⚠️ Aucune donnée d'évolution générée. Vérifiez que vos transactions sont dans la période testée.")
@@ -91,7 +91,7 @@ def config_page(tracker):
                         
                         # Test avec une période plus large
                         start_date_large = oldest_transaction
-                        evolution_data_large = tracker.get_portfolio_evolution(start_date_large, end_date)
+                        evolution_data_large = tracker.get_portfolio_evolution(start_date_large, end_date, user_id)
                         
                         if not evolution_data_large.empty:
                             st.success(f"✅ {len(evolution_data_large)} points d'évolution générés avec la période complète")
@@ -236,7 +236,7 @@ def config_page(tracker):
         if st.button("🚀 Initialiser l'historique complet", type="primary"):
             if not products.empty:
                 st.warning("⚠️ Cette opération peut prendre plusieurs minutes. Ne fermez pas la page.")
-                tracker.initialize_price_history(history_days)
+                tracker.initialize_price_history(history_days, user_id)
                 st.success("🎉 Historique initialisé ! Vous pouvez maintenant utiliser les courbes d'évolution.")
                 st.rerun()
             else:
@@ -246,7 +246,7 @@ def config_page(tracker):
         # Statistiques sur l'historique actuel
         if not products.empty:
             with st.expander("📊 État de l'historique actuel", expanded=False):
-                stats = tracker.db.get_database_stats()
+                stats = tracker.db.get_database_stats(user_id)
                 history_count = stats.get('price_history', 0)
                 
                 st.write(f"**Total points d'historique :** {history_count}")
@@ -278,10 +278,10 @@ def config_page(tracker):
     
     st.subheader("📊 Informations sur la base de données")
     
-    # Statistiques générales
-    platforms = tracker.get_platforms()
-    accounts = tracker.get_accounts()
-    stats = tracker.db.get_database_stats()
+    # Statistiques générales - filtrer par user_id
+    platforms = tracker.get_platforms(user_id)
+    accounts = tracker.get_accounts(user_id)
+    stats = tracker.db.get_database_stats(user_id)
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -360,7 +360,12 @@ def config_page(tracker):
             conn = sqlite3.connect(tracker.db.db_path)
             cursor = conn.cursor()
             one_year_ago = datetime.now() - timedelta(days=365)
-            cursor.execute("DELETE FROM price_history WHERE date < ?", (one_year_ago,))
+            # Filtrer par user_id en joignant avec la table products
+            cursor.execute("""DELETE FROM price_history 
+                            WHERE date < ? 
+                            AND product_id IN (
+                                SELECT id FROM financial_products WHERE user_id = ?
+                            )""", (one_year_ago, user_id))
             deleted_count = cursor.rowcount
             conn.commit()
             conn.close()
@@ -412,16 +417,18 @@ def config_page(tracker):
         else:
             st.write("Aucun taux en cache")
         
-        # Historique des taux de change stockés
-        st.write("**Taux de change utilisés dans les transactions :**")
+        # Historique des taux de change stockés - filtrer par user_id
+        st.write("**Taux de change utilisés dans vos transactions :**")
         import sqlite3
         conn = sqlite3.connect(tracker.db.db_path)
         cursor = conn.cursor()
-        cursor.execute('''SELECT date, rate, COUNT(*) as usage_count 
-                        FROM exchange_rates 
-                        WHERE from_currency = 'EUR' AND to_currency = 'USD'
-                        GROUP BY date, rate 
-                        ORDER BY date DESC LIMIT 10''')
+        cursor.execute('''SELECT er.date, er.rate, COUNT(*) as usage_count 
+                        FROM exchange_rates er
+                        JOIN transactions t ON t.transaction_date::date = er.date
+                        WHERE er.from_currency = 'EUR' AND er.to_currency = 'USD'
+                        AND t.user_id = ?
+                        GROUP BY er.date, er.rate 
+                        ORDER BY er.date DESC LIMIT 10''', (user_id,))
         historical_rates = cursor.fetchall()
         conn.close()
         
@@ -430,7 +437,7 @@ def config_page(tracker):
             for date, rate, count in historical_rates:
                 st.write(f"  📅 {date}: {rate:.4f} (utilisé {count} fois)")
         else:
-            st.write("Aucun taux historique stocké")
+            st.write("Aucun taux historique stocké pour vos transactions")
     
     # Nouvel outil de test de conversion historique
     st.divider()

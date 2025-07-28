@@ -10,43 +10,44 @@ from models.currency import CurrencyConverter
 from utils.yahoo_finance import YahooFinanceUtils
 
 class PortfolioTracker:
-    """Gestionnaire principal du portefeuille financier"""
+    """Gestionnaire principal du portefeuille financier multi-utilisateur"""
     
     def __init__(self, db_path: str = "portfolio.db"):
         self.db = DatabaseManager(db_path)
         self.currency_converter = CurrencyConverter()
         self.yahoo_utils = YahooFinanceUtils()
     
-    # Méthodes pour les plateformes (delegation vers database)
-    def add_platform(self, name: str, description: str = "") -> bool:
-        return self.db.add_platform(name, description)
+    # Méthodes pour les plateformes (avec user_id)
+    def add_platform(self, name: str, user_id: int, description: str = "") -> bool:
+        return self.db.add_platform(name, user_id, description)
     
-    def update_platform(self, platform_id: int, name: str, description: str = "") -> bool:
-        return self.db.update_platform(platform_id, name, description)
+    def update_platform(self, platform_id: int, name: str, user_id: int, description: str = "") -> bool:
+        return self.db.update_platform(platform_id, name, user_id, description)
     
-    def delete_platform(self, platform_id: int) -> Tuple[bool, str]:
-        return self.db.delete_platform(platform_id)
+    def delete_platform(self, platform_id: int, user_id: int) -> Tuple[bool, str]:
+        return self.db.delete_platform(platform_id, user_id)
     
-    def get_platforms(self) -> pd.DataFrame:
-        return self.db.get_platforms()
+    def get_platforms(self, user_id: int) -> pd.DataFrame:
+        return self.db.get_platforms(user_id)
     
-    # Méthodes pour les comptes
-    def add_account(self, platform_id: int, name: str, account_type: str) -> bool:
-        return self.db.add_account(platform_id, name, account_type)
+    # Méthodes pour les comptes (avec user_id)
+    def add_account(self, platform_id: int, name: str, account_type: str, user_id: int) -> bool:
+        return self.db.add_account(platform_id, name, account_type, user_id)
     
-    def update_account(self, account_id: int, platform_id: int, name: str, account_type: str) -> bool:
-        return self.db.update_account(account_id, platform_id, name, account_type)
+    def update_account(self, account_id: int, platform_id: int, name: str, account_type: str, user_id: int) -> bool:
+        return self.db.update_account(account_id, platform_id, name, account_type, user_id)
     
-    def delete_account(self, account_id: int) -> Tuple[bool, str]:
-        return self.db.delete_account(account_id)
+    def delete_account(self, account_id: int, user_id: int) -> Tuple[bool, str]:
+        return self.db.delete_account(account_id, user_id)
     
-    def get_accounts(self) -> pd.DataFrame:
-        return self.db.get_accounts()
+    def get_accounts(self, user_id: int) -> pd.DataFrame:
+        return self.db.get_accounts(user_id)
     
-    # Méthodes pour les produits financiers avec détection automatique
+    # Méthodes pour les produits financiers (communs - pas de user_id)
     def add_financial_product(self, symbol: str, manual_name: str = "") -> Tuple[bool, str]:
         """
         Ajoute un nouveau produit financier avec détection automatique de la devise et des informations
+        (Commun à tous les utilisateurs)
         """
         try:
             # Récupérer les informations complètes via Yahoo Finance
@@ -72,7 +73,7 @@ class PortfolioTracker:
             success, message = self.db.add_financial_product(product_info)
             
             if success:
-                # Ajouter quelques points d'historique récent
+                # Ajouter quelques points d'historique récent (commun)
                 self._add_recent_price_history(symbol, currency)
             
             return success, message
@@ -81,7 +82,7 @@ class PortfolioTracker:
             return False, f"Erreur lors de l'ajout du produit '{symbol}': {str(e)}"
     
     def _add_recent_price_history(self, symbol: str, currency: str, days: int = 30):
-        """Ajoute l'historique récent des prix pour un nouveau produit"""
+        """Ajoute l'historique récent des prix pour un nouveau produit (commun)"""
         try:
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=f"{days}d")
@@ -91,20 +92,20 @@ class PortfolioTracker:
                 if product is not None:
                     product_id = product['id']
                     
-                    # Ajouter l'historique avec conversion EUR/USD
+                    # Ajouter l'historique avec conversion EUR/USD (commun - user_id NULL)
                     for date, row in hist.iterrows():
                         price_eur, price_usd = self.currency_converter.convert_price_to_both(
                             row['Close'], currency
                         )
                         
-                        # Insérer dans price_history
+                        # Insérer dans price_history (user_id = NULL pour commun)
                         import sqlite3
                         conn = sqlite3.connect(self.db.db_path)
                         cursor = conn.cursor()
                         cursor.execute('''INSERT OR REPLACE INTO price_history 
-                                        (product_id, price, price_eur, price_usd, date)
-                                        VALUES (?, ?, ?, ?, ?)''',
-                                      (product_id, row['Close'], price_eur, price_usd, date.date()))
+                                        (product_id, price, price_eur, price_usd, date, user_id)
+                                        VALUES (?, ?, ?, ?, ?, ?)''',
+                                      (product_id, row['Close'], price_eur, price_usd, date.date(), None))
                         conn.commit()
                         conn.close()
                         
@@ -113,10 +114,47 @@ class PortfolioTracker:
     
     def update_financial_product(self, product_id: int, symbol: str, name: str, 
                                product_type: str, currency: str) -> bool:
-        return self.db.update_financial_product(product_id, symbol, name, product_type, currency)
+        # Note: Cette méthode pourrait être réservée aux admins
+        import sqlite3
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''UPDATE financial_products 
+                            SET symbol = ?, name = ?, product_type = ?, currency = ?
+                            WHERE id = ?''',
+                          (symbol, name, product_type, currency, product_id))
+            conn.commit()
+            return cursor.rowcount > 0
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
     
     def delete_financial_product(self, product_id: int) -> Tuple[bool, str]:
-        return self.db.delete_financial_product(product_id)
+        # Note: Cette méthode pourrait être réservée aux admins
+        import sqlite3
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        
+        # Vérifier si le produit est utilisé dans des transactions (tous utilisateurs)
+        cursor.execute("SELECT COUNT(*) FROM transactions WHERE product_id = ?", (product_id,))
+        transaction_count = cursor.fetchone()[0]
+        
+        if transaction_count > 0:
+            conn.close()
+            return False, f"Impossible de supprimer : {transaction_count} transaction(s) utilisent ce produit"
+        
+        try:
+            # Supprimer l'historique des prix
+            cursor.execute("DELETE FROM price_history WHERE product_id = ?", (product_id,))
+            # Supprimer le produit
+            cursor.execute("DELETE FROM financial_products WHERE id = ?", (product_id,))
+            conn.commit()
+            conn.close()
+            return True, "Produit supprimé avec succès"
+        except Exception as e:
+            conn.close()
+            return False, f"Erreur lors de la suppression : {e}"
     
     def get_financial_products(self) -> pd.DataFrame:
         return self.db.get_financial_products()
@@ -130,10 +168,11 @@ class PortfolioTracker:
                 return result.iloc[0]
         return None
     
-    # Méthodes pour les transactions avec conversion automatique
+    # Méthodes pour les transactions (avec user_id)
     def add_transaction(self, account_id: int, product_symbol: str, transaction_type: str,
                        quantity: float, price: float, price_currency: str, 
-                       transaction_date: datetime, fees: float = 0, fees_currency: str = "EUR"):
+                       transaction_date: datetime, fees: float = 0, fees_currency: str = "EUR",
+                       user_id: int = None):
         """
         Ajoute une nouvelle transaction avec conversion automatique des devises
         en utilisant les taux de change de la date de transaction
@@ -170,15 +209,16 @@ class PortfolioTracker:
         # Ajouter la transaction
         return self.db.add_transaction(
             account_id, product_id, transaction_type, quantity, price, price_currency,
-            price_eur, price_usd, transaction_date, fees_eur, fees_currency, exchange_rate_eur_usd
+            price_eur, price_usd, transaction_date, fees_eur, fees_currency, 
+            exchange_rate_eur_usd, user_id
         )
     
-    def get_all_transactions(self) -> pd.DataFrame:
-        return self.db.get_all_transactions()
+    def get_all_transactions(self, user_id: int) -> pd.DataFrame:
+        return self.db.get_all_transactions(user_id)
     
     def update_transaction(self, transaction_id: int, account_id: int, product_symbol: str, 
                           transaction_type: str, quantity: float, price: float, price_currency: str,
-                          transaction_date: datetime, fees: float = 0) -> Tuple[bool, str]:
+                          transaction_date: datetime, fees: float = 0, user_id: int = None) -> Tuple[bool, str]:
         """Met à jour une transaction avec support du changement de devise"""
         try:
             # Récupérer l'ID du produit
@@ -215,9 +255,10 @@ class PortfolioTracker:
                                 quantity = ?, price = ?, price_currency = ?,
                                 price_eur = ?, price_usd = ?, transaction_date = ?, 
                                 fees = ?, exchange_rate_eur_usd = ?
-                            WHERE id = ?''',
+                            WHERE id = ? AND user_id = ?''',
                           (account_id, product_id, transaction_type, quantity, price, price_currency,
-                           price_eur, price_usd, transaction_date, fees_eur, exchange_rate_eur_usd, transaction_id))
+                           price_eur, price_usd, transaction_date, fees_eur, exchange_rate_eur_usd, 
+                           transaction_id, user_id))
             
             success = cursor.rowcount > 0
             conn.commit()
@@ -226,35 +267,35 @@ class PortfolioTracker:
             if success:
                 return True, f"Transaction mise à jour avec succès! Prix: {price:.2f} {price_currency} (converti: {price_eur:.2f} EUR / {price_usd:.2f} USD)"
             else:
-                return False, "Transaction non trouvée"
+                return False, "Transaction non trouvée ou vous n'avez pas les droits"
             
         except Exception as e:
             return False, f"Erreur lors de la mise à jour: {str(e)}"
     
-    def delete_transaction(self, transaction_id: int) -> Tuple[bool, str]:
-        """Supprime une transaction"""
+    def delete_transaction(self, transaction_id: int, user_id: int) -> Tuple[bool, str]:
+        """Supprime une transaction d'un utilisateur"""
         import sqlite3
         conn = sqlite3.connect(self.db.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
+        cursor.execute("DELETE FROM transactions WHERE id = ? AND user_id = ?", (transaction_id, user_id))
         success = cursor.rowcount > 0
         
         conn.commit()
         conn.close()
         
-        return success, "Transaction supprimée avec succès" if success else "Transaction non trouvée"
+        return success, "Transaction supprimée avec succès" if success else "Transaction non trouvée ou vous n'avez pas les droits"
     
-    def get_transaction_by_id(self, transaction_id: int) -> Optional[dict]:
-        """Récupère une transaction spécifique par son ID"""
-        transactions = self.get_all_transactions()
+    def get_transaction_by_id(self, transaction_id: int, user_id: int) -> Optional[dict]:
+        """Récupère une transaction spécifique par son ID pour un utilisateur"""
+        transactions = self.get_all_transactions(user_id)
         if not transactions.empty:
             transaction = transactions[transactions['id'] == transaction_id]
             if not transaction.empty:
                 return transaction.iloc[0].to_dict()
         return None
     
-    # Méthodes pour la mise à jour des prix
+    # Méthodes pour la mise à jour des prix (commun)
     def update_price(self, symbol: str, days_history: int = 30) -> bool:
         """Met à jour le prix d'un produit avec historique"""
         try:
@@ -279,7 +320,7 @@ class PortfolioTracker:
                 # Mettre à jour le prix actuel
                 self.db.update_product_price(symbol, current_price, price_eur, price_usd)
                 
-                # Ajouter l'historique récent
+                # Ajouter l'historique récent (commun - user_id NULL)
                 product_id = product['id']
                 import sqlite3
                 conn = sqlite3.connect(self.db.db_path)
@@ -290,9 +331,9 @@ class PortfolioTracker:
                         row['Close'], product_currency
                     )
                     cursor.execute('''INSERT OR REPLACE INTO price_history 
-                                    (product_id, price, price_eur, price_usd, date)
-                                    VALUES (?, ?, ?, ?, ?)''',
-                                  (product_id, row['Close'], hist_price_eur, hist_price_usd, date.date()))
+                                    (product_id, price, price_eur, price_usd, date, user_id)
+                                    VALUES (?, ?, ?, ?, ?, ?)''',
+                                  (product_id, row['Close'], hist_price_eur, hist_price_usd, date.date(), None))
                 
                 conn.commit()
                 conn.close()
@@ -345,17 +386,17 @@ class PortfolioTracker:
                     conn = sqlite3.connect(self.db.db_path)
                     cursor = conn.cursor()
                     
-                    # Nettoyer l'ancien historique
-                    cursor.execute("DELETE FROM price_history WHERE product_id = ?", (row['id'],))
+                    # Nettoyer l'ancien historique commun pour ce produit
+                    cursor.execute("DELETE FROM price_history WHERE product_id = ? AND user_id IS NULL", (row['id'],))
                     
                     # Ajouter le nouvel historique avec conversion
                     for date, row_data in hist.iterrows():
                         price_eur, price_usd = self.currency_converter.convert_price_to_both(
                             row_data['Close'], row['currency']
                         )
-                        cursor.execute('''INSERT INTO price_history (product_id, price, price_eur, price_usd, date)
-                                        VALUES (?, ?, ?, ?, ?)''',
-                                      (row['id'], row_data['Close'], price_eur, price_usd, date.date()))
+                        cursor.execute('''INSERT INTO price_history (product_id, price, price_eur, price_usd, date, user_id)
+                                        VALUES (?, ?, ?, ?, ?, ?)''',
+                                      (row['id'], row_data['Close'], price_eur, price_usd, date.date(), None))
                     
                     # Mettre à jour le prix actuel
                     current_price = hist['Close'].iloc[-1]
@@ -384,9 +425,12 @@ class PortfolioTracker:
         status_text.empty()
         st.success("🎉 Initialisation de l'historique terminée!")
     
-    # Méthodes d'analyse du portefeuille
-    def get_portfolio_summary(self) -> pd.DataFrame:
+    # Méthodes d'analyse du portefeuille (avec user_id)
+    def get_portfolio_summary(self, user_id: int = None) -> pd.DataFrame:
         """Calcule le résumé du portefeuille en utilisant les prix EUR stockés"""
+        if user_id is None:
+            return pd.DataFrame()  # Retourner vide si pas d'utilisateur
+        
         import sqlite3
         conn = sqlite3.connect(self.db.db_path)
         
@@ -412,11 +456,12 @@ class PortfolioTracker:
             JOIN financial_products fp ON t.product_id = fp.id
             JOIN accounts a ON t.account_id = a.id
             JOIN platforms p ON a.platform_id = p.id
+            WHERE t.user_id = ?
             GROUP BY fp.symbol, a.id
             HAVING total_quantity > 0
         '''
         
-        df = pd.read_sql_query(query, conn)
+        df = pd.read_sql_query(query, conn, params=(user_id,))
         conn.close()
         
         if not df.empty:
@@ -448,7 +493,7 @@ class PortfolioTracker:
             SELECT ph.date, ph.price, ph.price_eur, ph.price_usd
             FROM price_history ph
             JOIN financial_products fp ON ph.product_id = fp.id
-            WHERE fp.symbol = ? AND ph.date BETWEEN ? AND ?
+            WHERE fp.symbol = ? AND ph.date BETWEEN ? AND ? AND ph.user_id IS NULL
             ORDER BY ph.date
         '''
         df = pd.read_sql_query(query, conn, params=(symbol, start_date.date(), end_date.date()))
@@ -461,12 +506,15 @@ class PortfolioTracker:
     
     def get_portfolio_evolution(self, start_date: datetime, end_date: datetime, 
                                account_filter: list = None, product_filter: list = None, 
-                               asset_class_filter: list = None) -> pd.DataFrame:
-        """Calcule l'évolution de la valeur du portefeuille dans le temps avec les nouveaux prix EUR/USD"""
+                               asset_class_filter: list = None, user_id: int = None) -> pd.DataFrame:
+        """Calcule l'évolution de la valeur du portefeuille dans le temps pour un utilisateur"""
+        if user_id is None:
+            return pd.DataFrame()
+        
         import sqlite3
         conn = sqlite3.connect(self.db.db_path)
         
-        # Base query pour récupérer les transactions
+        # Base query pour récupérer les transactions d'un utilisateur
         base_query = '''
             SELECT 
                 t.transaction_date,
@@ -485,10 +533,10 @@ class PortfolioTracker:
             JOIN financial_products fp ON t.product_id = fp.id
             JOIN accounts a ON t.account_id = a.id
             JOIN platforms p ON a.platform_id = p.id
-            WHERE t.transaction_date <= ?
+            WHERE t.user_id = ? AND t.transaction_date <= ?
         '''
         
-        params = [end_date]
+        params = [user_id, end_date]
         
         # Ajouter les filtres
         if account_filter:
@@ -513,6 +561,9 @@ class PortfolioTracker:
         
         if transactions.empty:
             return pd.DataFrame()
+        
+        # Le reste de la logique reste identique...
+        # [Code d'évolution du portefeuille identique à l'original]
         
         # Générer les dates pour l'évolution
         total_days = (end_date - start_date).days
@@ -672,9 +723,9 @@ class PortfolioTracker:
         
         return pd.DataFrame(evolution_data)
     
-    def get_available_filters(self):
-        """Récupère les options disponibles pour les filtres"""
-        accounts = self.get_accounts()
+    def get_available_filters(self, user_id: int):
+        """Récupère les options disponibles pour les filtres d'un utilisateur"""
+        accounts = self.get_accounts(user_id)
         products = self.get_financial_products()
         
         asset_classes = []
